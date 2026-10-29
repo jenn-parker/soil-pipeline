@@ -1,0 +1,11 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:pyenv",
+    "python.defaultInterpreterPath": "/Users/jennparker/.pyenv/versions/soil-pipeline/bin/python",
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.cwd": "${workspaceFolder}",
+    "python.testing.pytestPath": "/Users/jennparker/.pyenv/versions/soil-pipeline/bin/pytest",
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
+}

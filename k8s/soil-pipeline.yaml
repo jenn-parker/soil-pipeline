@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soil-pipeline
+  labels:
+    app: soil-pipeline
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: soil-pipeline
+  template:
+    metadata:
+      labels:
+        app: soil-pipeline
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: REPLACE_WITH_ECR_IMAGE_URI
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: soil-pipeline-secrets
+                  key: DATABASE_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: soil-pipeline-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+            - name: OPENAI_MODEL
+              value: gpt-6-astra
+            - name: AWS_REGION
+              value: us-east-1
+            - name: S3_BATCH_BUCKET
+              value: soil-pipeline-batches
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: soil-pipeline
+spec:
+  selector:
+    app: soil-pipeline
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soil-pipeline
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /health/ready
+spec:
+  ingressClassName: alb
+  rules:
+    - host: REPLACE_WITH_API_HOSTNAME
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: soil-pipeline
+                port:
+                  number: 80

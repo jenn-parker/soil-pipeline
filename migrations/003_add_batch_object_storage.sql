@@ -1,0 +1,3 @@
+ALTER TABLE soil_upload_batches
+    ADD COLUMN IF NOT EXISTS source_bucket VARCHAR(255) NULL,
+    ADD COLUMN IF NOT EXISTS source_key VARCHAR(1024) NULL;

@@ -1,0 +1,9 @@
+fastapi==0.162.0
+SQLAlchemy[asyncio]==2.1.6
+GeoAlchemy2
+asyncpg
+uvicorn[standard]
+python-multipart
+openai
+boto3
+email-validator

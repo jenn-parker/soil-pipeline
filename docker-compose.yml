@@ -1,0 +1,70 @@
+services:
+  web:
+    build: .
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://earth_user:earth_password@db:5432/soil_db
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
+      - AWS_ENDPOINT_URL_S3=http://localstack:4566
+      - S3_BATCH_BUCKET=${S3_BATCH_BUCKET:-soil-pipeline-batches}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-6-astra}
+    depends_on:
+      db:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  db:
+    image: postgis/postgis:16-3.6
+    platform: linux/amd64
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: earth_user
+      POSTGRES_PASSWORD: earth_password
+      POSTGRES_DB: soil_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-postgis.sql:/docker-entrypoint-initdb.d/001-postgis.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U earth_user -d soil_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack:latest
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - PERSISTENCE=1
+      - AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1}
+      - S3_BATCH_BUCKET=${S3_BATCH_BUCKET:-soil-pipeline-batches}
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN:?Set LOCALSTACK_AUTH_TOKEN before starting Docker Compose}
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./docker/localstack/init:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "awslocal s3api head-bucket --bucket ${S3_BATCH_BUCKET:-soil-pipeline-batches}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  localstack_data:
