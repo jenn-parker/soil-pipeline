@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { Marker, MapContainer, Popup, TileLayer } from 'react-leaflet'
+import { divIcon } from 'leaflet'
 import './App.css'
 
 type SoilProperties = {
@@ -11,12 +12,15 @@ type SoilProperties = {
   sand_pct: number | string | null
   silt_pct: number | string | null
   clay_pct: number | string | null
+  can_edit: boolean
+  can_manage_access: boolean
 }
 type SoilFeature = {
   geometry: { coordinates: [number, number] }
   properties: SoilProperties
 }
 type SoilFeatureCollection = { features: SoilFeature[] }
+type SampleGroup = { key: string; latitude: number; longitude: number; samples: SoilFeature[] }
 type MeasurementRange = { sample_count: number; minimum: number | string | null; maximum: number | string | null }
 type SoilRangeReport = {
   sample_count: number
@@ -95,6 +99,147 @@ function AddSamplePage() {
   </main>
 }
 
+function SampleEditPage({ sampleId }: { sampleId: string }) {
+  const [sample, setSample] = useState<Record<string, unknown> | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(response.status === 403 ? 'You do not have access to edit this sample.' : 'Sample could not be loaded.')
+        setSample(await response.json() as Record<string, unknown>)
+      })
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Sample could not be loaded.'))
+  }, [sampleId])
+
+  const saveChanges = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSaving(true)
+    setError(null)
+    const form = new FormData(event.currentTarget)
+    const payload: Record<string, string | number> = {}
+    form.forEach((value, key) => {
+      if (typeof value !== 'string' || !value) return
+      if (key === 'sampled_at') payload[key] = new Date(value).toISOString()
+      else if (key !== 'sample_id' && key !== 'field_name') payload[key] = Number(value)
+      else payload[key] = value
+    })
+    try {
+      const response = await fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const result = await response.json() as { detail?: string }
+      if (!response.ok) throw new Error(result.detail ?? 'Sample could not be updated.')
+      window.location.href = '/'
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Sample could not be updated.')
+      setSaving(false)
+    }
+  }
+
+  const value = (key: string) => sample?.[key] == null ? '' : String(sample[key])
+  const localDate = sample?.sampled_at ? new Date(String(sample.sampled_at)).toISOString().slice(0, 16) : ''
+  if (error && !sample) return <main className="app-shell form-page"><header className="topbar"><a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a></header><p className="report-error">{error}</p></main>
+  if (!sample) return <main className="app-shell form-page"><header className="topbar"><a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a></header><p className="form-note">Loading sample…</p></main>
+  return <main className="app-shell form-page"><header className="topbar"><a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a><nav><a href="/">Dashboard</a><a className="signin" href="/auth/logout">Sign out</a></nav></header><section className="form-intro"><p className="eyebrow">SAMPLE MANAGEMENT / EDIT</p><h1>Update a soil sample</h1><p className="lede">Changes are limited to you and other users granted editor access.</p></section><form className="sample-form" onSubmit={saveChanges}><fieldset><legend>Sample details</legend><div className="form-grid"><label>Sample ID<input name="sample_id" value={value('sample_id')} readOnly /></label><label>Field name<input name="field_name" defaultValue={value('field_name')} /></label><label>Sample date *<input name="sampled_at" type="datetime-local" defaultValue={localDate} required /></label><label>Depth (inches)<input name="sampling_depth_inches" type="number" step="0.01" defaultValue={value('sampling_depth_inches')} /></label></div></fieldset><fieldset><legend>Location</legend><div className="form-grid"><label>Latitude *<input name="latitude" type="number" step="any" defaultValue={value('latitude')} required /></label><label>Longitude *<input name="longitude" type="number" step="any" defaultValue={value('longitude')} required /></label></div></fieldset><fieldset><legend>Measurements</legend><div className="form-grid three"><label>pH<input name="soil_ph" type="number" min="0" max="14" step="0.01" defaultValue={value('soil_ph')} /></label><label>Organic matter (%)<input name="organic_matter_pct" type="number" min="0" max="100" step="0.01" defaultValue={value('organic_matter_pct')} /></label><label>Nitrogen (ppm)<input name="nitrate_nitrogen_ppm" type="number" min="0" step="0.01" defaultValue={value('nitrate_nitrogen_ppm')} /></label><label>Phosphorus (ppm)<input name="phosphorus_ppm" type="number" min="0" step="0.01" defaultValue={value('phosphorus_ppm')} /></label><label>Potassium (ppm)<input name="potassium_ppm" type="number" min="0" step="0.01" defaultValue={value('potassium_ppm')} /></label><label>Sand (%)<input name="sand_pct" type="number" min="0" max="100" step="0.01" defaultValue={value('sand_pct')} /></label><label>Silt (%)<input name="silt_pct" type="number" min="0" max="100" step="0.01" defaultValue={value('silt_pct')} /></label><label>Clay (%)<input name="clay_pct" type="number" min="0" max="100" step="0.01" defaultValue={value('clay_pct')} /></label></div></fieldset>{error && <p className="report-error">{error}</p>}<div className="form-actions"><a className="secondary-button" href="/">Cancel</a><button className="primary-button report-button" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</button></div></form></main>
+}
+
+function SampleAccessPage({ sampleId }: { sampleId: string }) {
+  const [access, setAccess] = useState<{ email: string; role: string }[]>([])
+  const [email, setEmail] = useState('')
+  const [role, setRole] = useState('viewer')
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const loadAccess = useCallback(() => fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access`).then(async (response) => { if (!response.ok) throw new Error('Only the sample owner can manage access.') ; setAccess(await response.json() as { email: string; role: string }[]) }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Access list could not be loaded.')), [sampleId])
+  useEffect(() => { void loadAccess() }, [loadAccess])
+  const grant = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setSaving(true); setError(null); try { const response = await fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, role }) }); const result = await response.json() as { detail?: string }; if (!response.ok) throw new Error(result.detail ?? 'Access could not be granted.'); setEmail(''); await loadAccess() } catch (reason: unknown) { setError(reason instanceof Error ? reason.message : 'Access could not be granted.') } finally { setSaving(false) } }
+  const revoke = async (userEmail: string) => { await fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access/${encodeURIComponent(userEmail)}`, { method: 'DELETE' }); await loadAccess() }
+  return <main className="app-shell form-page"><header className="topbar"><a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a><nav><a href="/">Dashboard</a><a className="signin" href="/auth/logout">Sign out</a></nav></header><section className="form-intro"><p className="eyebrow">SAMPLE MANAGEMENT / SHARING</p><h1>Manage access</h1><p className="lede">Invite another signed-in user to view or edit this sample.</p></section><section className="access-card"><form className="report-form" onSubmit={grant}><label>Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="farmer@example.com" required /></label><label>Permission<select value={role} onChange={(event) => setRole(event.target.value)}><option value="viewer">Can view</option><option value="editor">Can edit</option></select></label><button className="primary-button report-button" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Grant access'}</button></form>{error && <p className="report-error">{error}</p>}<div className="access-list"><h3>Current access</h3>{access.length === 0 ? <p className="form-note">No additional users have access.</p> : access.map((entry) => <div className="access-row" key={entry.email}><span>{entry.email}</span><span>{entry.role}</span><button type="button" onClick={() => void revoke(entry.email)}>Revoke</button></div>)}</div></section></main>
+}
+
+function ArchiveSamplePage({ sampleId }: { sampleId: string }) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const archive = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      const response = await fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/archive`, { method: 'POST' })
+      const result = await response.json() as { detail?: string }
+      if (!response.ok) throw new Error(result.detail ?? 'Sample could not be archived.')
+      window.location.href = '/'
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Sample could not be archived.')
+      setSaving(false)
+    }
+  }
+  return <main className="app-shell form-page"><header className="topbar"><a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a><nav><a href="/">Dashboard</a><a className="signin" href="/auth/logout">Sign out</a></nav></header><section className="form-intro"><p className="eyebrow">SAMPLE MANAGEMENT / ARCHIVE</p><h1>Archive this sample?</h1><p className="lede">The sample will be removed from the map and reports, but its history and access records will be preserved. You can restore it later through the API.</p></section><div className="form-actions archive-actions"><a className="secondary-button" href="/">Keep sample</a><button className="primary-button archive-button" type="button" onClick={() => void archive()} disabled={saving}>{saving ? 'Archiving…' : 'Archive sample'}</button></div>{error && <p className="report-error">{error}</p>}</main>
+}
+
+type ManagedSample = {
+  id: number
+  sample_id: string
+  field_name: string | null
+  sampled_at: string
+  latitude: number | null
+  longitude: number | null
+  soil_ph: number | string | null
+  archived_at: string | null
+}
+
+function MySamplesPage() {
+  const [samples, setSamples] = useState<ManagedSample[]>([])
+  const [includeArchived, setIncludeArchived] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [busySampleId, setBusySampleId] = useState<string | null>(null)
+
+  const loadSamples = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await fetch(`/api/v1/soil-samples/mine?include_archived=${includeArchived}`, { cache: 'no-store' })
+      if (response.status === 401) throw new Error('Sign in to view your samples.')
+      if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
+      setSamples(await response.json() as ManagedSample[])
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Unable to load your samples.')
+    } finally {
+      setLoading(false)
+    }
+  }, [includeArchived])
+
+  useEffect(() => {
+    fetch(`/api/v1/soil-samples/mine?include_archived=${includeArchived}`, { cache: 'no-store' })
+      .then(async (response) => {
+        if (response.status === 401) throw new Error('Sign in to view your samples.')
+        if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
+        return response.json() as Promise<ManagedSample[]>
+      })
+      .then((data) => { setSamples(data); setError(null) })
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load your samples.'))
+      .finally(() => setLoading(false))
+  }, [includeArchived])
+
+  const changeArchiveState = async (sample: ManagedSample) => {
+    const action = sample.archived_at ? 'restore' : 'archive'
+    if (!sample.archived_at && !window.confirm(`Archive ${sample.sample_id}? It will be removed from the map and reports.`)) return
+    setBusySampleId(sample.sample_id)
+    setError(null)
+    try {
+      const response = await fetch(`/api/v1/soil-samples/${encodeURIComponent(sample.sample_id)}/${action}`, { method: 'POST' })
+      const result = await response.json() as { detail?: string }
+      if (!response.ok) throw new Error(result.detail ?? `Sample could not be ${action}d.`)
+      await loadSamples()
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : `Sample could not be ${action}d.`)
+    } finally {
+      setBusySampleId(null)
+    }
+  }
+
+  return <main className="app-shell form-page"><header className="topbar"><a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a><nav><a href="/">Dashboard</a><a className="signin" href="/auth/logout">Sign out</a></nav></header><section className="form-intro"><p className="eyebrow">SAMPLE MANAGEMENT / OWNED DATA</p><h1>My samples</h1><p className="lede">Review the field samples you entered, update them, manage access, or archive records that are no longer active.</p></section><section className="sample-library"><div className="library-toolbar"><label className="archive-toggle"><input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} /> Include archived samples</label><a className="primary-button manual-button" href="/samples/new">Add sample</a></div>{error && <p className="report-error">{error}</p>}{loading ? <p className="form-note">Loading your samples…</p> : samples.length === 0 ? <div className="empty-library"><h3>{includeArchived ? 'No samples yet' : 'No active samples'}</h3><p>{includeArchived ? 'Samples you enter or upload will appear here.' : 'Archived samples are hidden. Turn on the archived filter to include them.'}</p></div> : <div className="sample-list">{samples.map((sample) => <article className={`sample-row${sample.archived_at ? ' archived-sample' : ''}`} key={sample.id}><div><span className="sample-status">{sample.archived_at ? 'Archived' : 'Active'}</span><h3>{sample.sample_id}</h3><p>{sample.field_name ?? 'Unnamed field'} · {new Date(sample.sampled_at).toLocaleDateString()}</p><p className="sample-coordinates">{sample.latitude === null || sample.longitude === null ? 'No map coordinates' : `${sample.latitude}, ${sample.longitude}`} · pH {sample.soil_ph ?? 'Not recorded'}</p></div><div className="sample-row-actions">{!sample.archived_at && <><a className="secondary-button" href={`/samples/${encodeURIComponent(sample.sample_id)}/edit`}>Edit</a><a className="secondary-button" href={`/samples/${encodeURIComponent(sample.sample_id)}/access`}>Manage access</a></>}<button className={sample.archived_at ? 'secondary-button' : 'archive-button'} type="button" onClick={() => void changeArchiveState(sample)} disabled={busySampleId === sample.sample_id}>{busySampleId === sample.sample_id ? 'Saving…' : sample.archived_at ? 'Restore' : 'Archive'}</button></div></article>)}</div>}</section></main>
+}
+
 function App() {
   const [samples, setSamples] = useState<SoilFeature[]>([])
   const [loading, setLoading] = useState(true)
@@ -111,29 +256,32 @@ function App() {
   const [uploadResult, setUploadResult] = useState<BatchResult | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
 
-  const loadSamples = async () => {
+  const loadSamples = useCallback(async () => {
+    setLoading(true)
+    setError(null)
     const query = new URLSearchParams({ west: String(bounds.west), south: String(bounds.south), east: String(bounds.east), north: String(bounds.north), limit: '1000' })
-    const response = await fetch(`/api/v1/maps/soil-samples?${query}`)
-    if (response.status === 401) throw new Error('Sign in to view soil samples.')
-    if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
-    setSamples((await response.json() as SoilFeatureCollection).features)
-  }
+    try {
+      const response = await fetch(`/api/v1/maps/soil-samples?${query}`, { cache: 'no-store' })
+      if (response.status === 401) throw new Error('Sign in to view soil samples.')
+      if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
+      setSamples((await response.json() as SoilFeatureCollection).features)
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : 'Unable to load samples.')
+      throw reason
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    const query = new URLSearchParams({
-      west: String(bounds.west),
-      south: String(bounds.south),
-      east: String(bounds.east),
-      north: String(bounds.north),
-      limit: '1000',
-    })
-    fetch(`/api/v1/maps/soil-samples?${query}`)
+    const query = new URLSearchParams({ west: String(bounds.west), south: String(bounds.south), east: String(bounds.east), north: String(bounds.north), limit: '1000' })
+    fetch(`/api/v1/maps/soil-samples?${query}`, { cache: 'no-store' })
       .then(async (response) => {
         if (response.status === 401) throw new Error('Sign in to view soil samples.')
         if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
         return response.json() as Promise<SoilFeatureCollection>
       })
-      .then((data) => setSamples(data.features))
+      .then((data) => { setSamples(data.features); setError(null) })
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Unable to load samples.'))
       .finally(() => setLoading(false))
   }, [])
@@ -151,6 +299,18 @@ function App() {
       .filter((value): value is number => value !== null)
     return values.length ? { min: Math.min(...values), max: Math.max(...values) } : null
   }, [colorMetric, samples])
+
+  const groupedSamples = useMemo<SampleGroup[]>(() => {
+    const groups = new Map<string, SampleGroup>()
+    samples.forEach((sample) => {
+      const [longitude, latitude] = sample.geometry.coordinates
+      const key = `${latitude},${longitude}`
+      const group = groups.get(key)
+      if (group) group.samples.push(sample)
+      else groups.set(key, { key, latitude, longitude, samples: [sample] })
+    })
+    return Array.from(groups.values())
+  }, [samples])
 
   const colorForValue = (value: number | null) => {
     if (value === null || !metricRange) return '#d9b86c'
@@ -183,7 +343,14 @@ function App() {
     return parsed === null ? '—' : parsed.toFixed(2)
   }
 
+  if (window.location.pathname === '/samples') return <MySamplesPage />
   if (window.location.pathname === '/samples/new') return <AddSamplePage />
+  const editMatch = window.location.pathname.match(/^\/samples\/([^/]+)\/edit$/)
+  if (editMatch) return <SampleEditPage sampleId={decodeURIComponent(editMatch[1])} />
+  const accessMatch = window.location.pathname.match(/^\/samples\/([^/]+)\/access$/)
+  if (accessMatch) return <SampleAccessPage sampleId={decodeURIComponent(accessMatch[1])} />
+  const archiveMatch = window.location.pathname.match(/^\/samples\/([^/]+)\/archive$/)
+  if (archiveMatch) return <ArchiveSamplePage sampleId={decodeURIComponent(archiveMatch[1])} />
 
   const uploadBatch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -212,7 +379,7 @@ function App() {
       <header className="topbar">
         <a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a>
         <nav>
-          <a href="/samples/new">Add sample</a><a href="/docs" target="_blank" rel="noreferrer">API docs</a>
+          <a href="/samples">My samples</a><a href="/samples/new">Add sample</a><a href="/docs" target="_blank" rel="noreferrer">API docs</a>
           {loading || error ? <a className="signin" href="/auth/login">Sign in</a> : <a className="signin" href="/auth/logout">Sign out</a>}
         </nav>
       </header>
@@ -253,11 +420,16 @@ function App() {
         {report && <div className="report-result"><div className="report-result-head"><div><span className="result-label">Nearby samples</span><strong>{report.sample_count}</strong></div><span className="result-date">{report.first_sampled_at ? `Sample window: ${new Date(report.first_sampled_at).toLocaleDateString()} – ${new Date(report.last_sampled_at ?? report.first_sampled_at).toLocaleDateString()}` : 'No dated samples found'}</span></div><div className="report-measurements">{[['soil_ph', 'pH'], ['organic_matter_pct', 'Organic matter %'], ['sand_pct', 'Sand %'], ['silt_pct', 'Silt %'], ['clay_pct', 'Clay %']].map(([key, label]) => { const measurement = reportMeasurement(key); return <div key={key}><span>{label}</span><strong>{measurement ? `${formatMeasurement(measurement.minimum)}–${formatMeasurement(measurement.maximum)}` : '—'}</strong></div> })}</div></div>}
       </section>
       <section className="map-section">
-        <div className="section-heading"><div><p className="eyebrow">MAP / SAMPLE LOCATIONS</p><h2>Soil sample coverage</h2></div><label className="metric-picker">Color by<select value={colorMetric} onChange={(event) => setColorMetric(event.target.value as MetricKey)}>{Object.entries(metricLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div>
+        <div className="section-heading"><div><p className="eyebrow">MAP / SAMPLE LOCATIONS</p><h2>Soil sample coverage</h2></div><div className="section-actions"><button className="secondary-button" type="button" onClick={() => void loadSamples().catch(() => undefined)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh map'}</button><label className="metric-picker">Color by<select value={colorMetric} onChange={(event) => setColorMetric(event.target.value as MetricKey)}>{Object.entries(metricLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div></div>
         <div className="map-frame">
           <MapContainer center={initialCenter} zoom={6} scrollWheelZoom className="soil-map">
             <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            {samples.map((sample) => { const [longitude, latitude] = sample.geometry.coordinates; const ph = numericValue(sample.properties.soil_ph); const selectedValue = numericValue(sample.properties[colorMetric]); return <CircleMarker key={sample.properties.sample_id} center={[latitude, longitude]} radius={8} eventHandlers={{ click: () => { setReportLatitude(String(latitude)); setReportLongitude(String(longitude)) } }} pathOptions={{ color: '#174a3b', fillColor: colorForValue(selectedValue), fillOpacity: 0.85 }}><Popup><strong>{sample.properties.sample_id}</strong><br />{sample.properties.field_name ?? 'Unnamed field'}<br />{colorMetric !== 'soil_ph' && <>{metricLabels[colorMetric]}: {selectedValue === null ? 'Not recorded' : selectedValue}<br /></>}pH: {ph === null ? 'Not recorded' : ph}<br />Sampled: {new Date(sample.properties.sampled_at).toLocaleDateString()}</Popup></CircleMarker> })}
+            {groupedSamples.map((group) => {
+              const selectedValues = group.samples.map((sample) => numericValue(sample.properties[colorMetric])).filter((value): value is number => value !== null)
+              const groupValue = selectedValues.length ? selectedValues.reduce((sum, value) => sum + value, 0) / selectedValues.length : null
+              const markerIcon = divIcon({ className: 'soil-marker-wrapper', html: `<span class="soil-marker${group.samples.length > 1 ? ' soil-marker-cluster' : ''}" style="background:${colorForValue(groupValue)}">${group.samples.length > 1 ? group.samples.length : ''}</span>` })
+              return <Marker key={group.key} position={[group.latitude, group.longitude]} icon={markerIcon} eventHandlers={{ click: () => { setReportLatitude(String(group.latitude)); setReportLongitude(String(group.longitude)) } }}><Popup><strong>{group.samples.length > 1 ? `${group.samples.length} samples at this location` : group.samples[0].properties.sample_id}</strong>{group.samples.map((sample) => { const ph = numericValue(sample.properties.soil_ph); const selectedValue = numericValue(sample.properties[colorMetric]); return <div className="sample-popup-entry" key={sample.properties.sample_id}><strong>{sample.properties.sample_id}</strong><br />{sample.properties.field_name ?? 'Unnamed field'}<br />{colorMetric !== 'soil_ph' && <>{metricLabels[colorMetric]}: {selectedValue === null ? 'Not recorded' : selectedValue}<br /></>}pH: {ph === null ? 'Not recorded' : ph}<br />Sampled: {new Date(sample.properties.sampled_at).toLocaleDateString()}<br />{sample.properties.can_edit && <a className="popup-action" href={`/samples/${encodeURIComponent(sample.properties.sample_id)}/edit`}>Edit sample</a>}{sample.properties.can_manage_access && <><br /><a className="popup-action" href={`/samples/${encodeURIComponent(sample.properties.sample_id)}/access`}>Manage access</a><br /><a className="popup-action archive-link" href={`/samples/${encodeURIComponent(sample.properties.sample_id)}/archive`}>Archive sample</a></>}{!sample.properties.can_edit && !sample.properties.can_manage_access && <span className="popup-summary">Reference data · read-only</span>}</div> })}<span className="popup-summary">Color metric average: {groupValue === null ? 'Not recorded' : groupValue.toFixed(2)}</span></Popup></Marker>
+            })}
           </MapContainer>
           {error && <div className="map-overlay"><div className="empty-state"><span className="lock-icon">⌁</span><h3>Authentication required</h3><p>{error}</p><a className="primary-button" href="/auth/login">Continue</a></div></div>}
         </div>

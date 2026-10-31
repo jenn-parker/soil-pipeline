@@ -19,6 +19,8 @@ class SoilSampleProperties(BaseModel):
     sand_pct: Decimal | None
     silt_pct: Decimal | None
     clay_pct: Decimal | None
+    can_edit: bool = False
+    can_manage_access: bool = False
 
 
 class SoilSampleFeature(BaseModel):

@@ -7,18 +7,19 @@ from time import perf_counter
 
 from geoalchemy2 import Geography, Geometry
 from geoalchemy2.elements import WKTElement
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from pydantic import ValidationError
-from sqlalchemy import case, cast, func, select, update
+from sqlalchemy import and_, case, cast, false, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db_session
-from app.auth import require_scope
+from app.auth import Principal, require_scope
 from app.models.batch import SoilSampleBatch
 from app.models.sample import Party, SampleProvenance
-from app.models.soil import SoilTestResult
+from app.models.soil import SoilSampleAccess, SoilTestResult
 from app.schemas.batch import SoilSampleBatchRead
+from app.schemas.access import SampleAccessGrant, SampleAccessRead
 from app.schemas.geojson import (
     GeoJSONPoint,
     SoilSampleFeature,
@@ -87,6 +88,55 @@ def make_wgs84_point(latitude: float | None, longitude: float | None) -> WKTElem
     return WKTElement(f"POINT({longitude} {latitude})", srid=4326)
 
 
+def _principal(request: Request) -> Principal:
+    return request.state.principal
+
+
+def _accessible_sample_filter(principal: Principal):
+    shared = false()
+    if principal.email:
+        shared = select(SoilSampleAccess.id).where(
+            SoilSampleAccess.soil_sample_id == SoilTestResult.id,
+            func.lower(SoilSampleAccess.user_email) == principal.email,
+        ).exists()
+    return and_(
+        SoilTestResult.archived_at.is_(None),
+        or_(
+            SoilTestResult.created_by_sub.is_(None),
+            SoilTestResult.created_by_sub == principal.subject,
+            shared,
+        ),
+    )
+
+
+async def _get_owned_sample(sample_id: str, principal: Principal, db: AsyncSession) -> SoilTestResult:
+    sample = await db.scalar(select(SoilTestResult).where(SoilTestResult.sample_id == sample_id))
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"Soil sample {sample_id} was not found")
+    if sample.created_by_sub != principal.subject:
+        raise HTTPException(status_code=403, detail="Only the sample owner can manage sharing")
+    return sample
+
+
+async def _get_editable_sample(sample_id: str, principal: Principal, db: AsyncSession) -> SoilTestResult:
+    sample = await db.scalar(select(SoilTestResult).where(SoilTestResult.sample_id == sample_id))
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"Soil sample {sample_id} was not found")
+    if sample.archived_at is not None:
+        raise HTTPException(status_code=409, detail="This sample is archived; restore it before editing")
+    if sample.created_by_sub == principal.subject:
+        return sample
+    if principal.email:
+        can_edit = await db.scalar(select(SoilSampleAccess.id).where(
+            SoilSampleAccess.soil_sample_id == sample.id,
+            func.lower(SoilSampleAccess.user_email) == principal.email,
+            SoilSampleAccess.role == "editor",
+        ))
+        if can_edit:
+            return sample
+    raise HTTPException(status_code=403, detail="You do not have edit access to this sample")
+
+
 @router.get(
     "/reports/soil-ranges",
     tags=["Reports"],
@@ -98,6 +148,7 @@ def make_wgs84_point(latitude: float | None, longitude: float | None) -> WKTElem
     response_model=SoilRangeReport,
 )
 async def get_soil_range_report(
+    request: Request,
     latitude: float = Query(..., ge=-90, le=90),
     longitude: float = Query(..., ge=-180, le=180),
     radius_km: float = Query(..., gt=0, le=1000),
@@ -124,12 +175,15 @@ async def get_soil_range_report(
             ]
         )
 
+    filters = [
+        SoilTestResult.location.is_not(None),
+        func.ST_DWithin(SoilTestResult.location, center_point, radius_km * 1000),
+    ]
+    if request is not None:
+        filters.append(_accessible_sample_filter(_principal(request)))
     result = await db.execute(
         select(*aggregates)
-        .where(
-            SoilTestResult.location.is_not(None),
-            func.ST_DWithin(SoilTestResult.location, center_point, radius_km * 1000),
-        )
+        .where(*filters)
     )
     row = result.mappings().one()
     measurements = {
@@ -163,22 +217,24 @@ async def get_soil_range_report(
     response_model=LocationRecommendationResponse,
 )
 async def create_location_recommendation_brief(
-    request: LocationRecommendationRequest,
+    request: Request,
+    recommendation_request: LocationRecommendationRequest,
     db: AsyncSession = Depends(get_db_session),
 ) -> LocationRecommendationResponse:
     soil_summary = await get_soil_range_report(
-        request.latitude,
-        request.longitude,
-        request.radius_km,
+        request,
+        recommendation_request.latitude,
+        recommendation_request.longitude,
+        recommendation_request.radius_km,
         db,
     )
-    missing_context = missing_recommendation_context(request)
+    missing_context = missing_recommendation_context(recommendation_request)
     recommendation_status, guidance = build_recommendation_guidance(soil_summary, missing_context)
 
     ai_explanation = None
-    if request.include_ai_explanation and soil_summary.sample_count > 0:
+    if recommendation_request.include_ai_explanation and soil_summary.sample_count > 0:
         try:
-            ai_explanation = await explain_soil_summary(request, soil_summary, missing_context)
+            ai_explanation = await explain_soil_summary(recommendation_request, soil_summary, missing_context)
         except RuntimeError as exc:
             detail = str(exc)
             status_code = 503 if "OPENAI_API_KEY" in detail else 502
@@ -202,6 +258,7 @@ async def create_location_recommendation_brief(
     response_model=SoilSampleFeatureCollection,
 )
 async def get_soil_samples_geojson(
+    request: Request,
     west: float = Query(..., ge=-180, le=180),
     south: float = Query(..., ge=-90, le=90),
     east: float = Query(..., ge=-180, le=180),
@@ -224,6 +281,8 @@ async def get_soil_samples_geojson(
     latitude = func.ST_Y(point_geometry).label("latitude")
     result = await db.execute(
         select(
+            SoilTestResult.id,
+            SoilTestResult.created_by_sub,
             SoilTestResult.sample_id,
             SoilTestResult.field_name,
             SoilTestResult.sampled_at,
@@ -238,10 +297,20 @@ async def get_soil_samples_geojson(
         .where(
             SoilTestResult.location.is_not(None),
             func.ST_Intersects(SoilTestResult.location, bounding_box),
+            _accessible_sample_filter(_principal(request)),
         )
         .order_by(SoilTestResult.sample_id)
         .limit(limit)
     )
+    rows = result.all()
+    principal = _principal(request)
+    shared_roles: dict[int, str] = {}
+    if principal.email and rows:
+        shared = await db.execute(select(SoilSampleAccess.soil_sample_id, SoilSampleAccess.role).where(
+            SoilSampleAccess.soil_sample_id.in_([row.id for row in rows]),
+            func.lower(SoilSampleAccess.user_email) == principal.email,
+        ))
+        shared_roles = {sample_id: role for sample_id, role in shared.all()}
     features = [
         SoilSampleFeature(
             geometry=GeoJSONPoint(coordinates=(row.longitude, row.latitude)),
@@ -254,9 +323,11 @@ async def get_soil_samples_geojson(
                 sand_pct=row.sand_pct,
                 silt_pct=row.silt_pct,
                 clay_pct=row.clay_pct,
+                can_edit=row.created_by_sub == principal.subject or shared_roles.get(row.id) == "editor",
+                can_manage_access=row.created_by_sub == principal.subject,
             ),
         )
-        for row in result
+        for row in rows
     ]
     return SoilSampleFeatureCollection(features=features)
 
@@ -272,6 +343,7 @@ async def get_soil_samples_geojson(
     dependencies=[Depends(require_scope("soil:write"))],
 )
 async def create_soil_test_result(
+    request: Request,
     sample: SoilTestResultCreate,
     db: AsyncSession = Depends(get_db_session),
 ) -> SoilTestResult:
@@ -303,6 +375,7 @@ async def create_soil_test_result(
         latitude=latitude,
         longitude=longitude,
         location=make_wgs84_point(latitude, longitude),
+        created_by_sub=_principal(request).subject,
     )
     db_sample = SoilTestResult(**sample_data)
     db.add(db_sample)
@@ -311,6 +384,210 @@ async def create_soil_test_result(
         provenance.soil_sample_id = db_sample.id
     await db.refresh(db_sample)
     return db_sample
+
+
+@router.get(
+    "/soil-samples/mine",
+    tags=["Soil samples"],
+    summary="List the current user's soil samples",
+    response_model=list[SoilTestResultRead],
+)
+async def list_owned_soil_samples(
+    include_archived: bool = Query(False),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db_session),
+) -> list[SoilTestResult]:
+    filters = [SoilTestResult.created_by_sub == _principal(request).subject]
+    if not include_archived:
+        filters.append(SoilTestResult.archived_at.is_(None))
+    result = await db.scalars(
+        select(SoilTestResult).where(*filters).order_by(SoilTestResult.sampled_at.desc(), SoilTestResult.sample_id)
+    )
+    return list(result.all())
+
+
+@router.get(
+    "/soil-samples/{sample_id}",
+    tags=["Soil samples"],
+    summary="Read one accessible soil test record",
+    response_model=SoilTestResultRead,
+)
+async def get_soil_test_result(
+    sample_id: str,
+    db: AsyncSession = Depends(get_db_session),
+    request: Request = None,
+) -> SoilTestResult:
+    sample = await db.scalar(select(SoilTestResult).where(
+        SoilTestResult.sample_id == sample_id,
+        _accessible_sample_filter(_principal(request)),
+    ))
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"Soil sample {sample_id} was not found")
+    return sample
+
+
+@router.put(
+    "/soil-samples/{sample_id}",
+    tags=["Soil samples"],
+    summary="Update an owned or shared soil test record",
+    response_model=SoilTestResultRead,
+    dependencies=[Depends(require_scope("soil:write"))],
+)
+async def update_soil_test_result(
+    request: Request,
+    sample_id: str,
+    sample: SoilTestResultCreate,
+    db: AsyncSession = Depends(get_db_session),
+) -> SoilTestResult:
+    if sample.sample_id != sample_id:
+        raise HTTPException(status_code=400, detail="The path sample_id must match the request body")
+    db_sample = await _get_editable_sample(sample_id, _principal(request), db)
+    sample_data = sample.model_dump()
+    sample_data.update(
+        latitude=sample.latitude,
+        longitude=sample.longitude,
+        location=make_wgs84_point(sample.latitude, sample.longitude),
+    )
+    for field, value in sample_data.items():
+        if field not in {"sample_id", "created_by_sub"}:
+            setattr(db_sample, field, value)
+    await db.flush()
+    await db.refresh(db_sample)
+    return db_sample
+
+
+@router.delete(
+    "/soil-samples/{sample_id}",
+    tags=["Soil samples"],
+    summary="Delete an owned soil test record",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    dependencies=[Depends(require_scope("soil:write"))],
+)
+async def delete_soil_test_result(
+    request: Request,
+    sample_id: str,
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    db_sample = await _get_owned_sample(sample_id, _principal(request), db)
+    await db.delete(db_sample)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/soil-samples/{sample_id}/archive",
+    tags=["Soil samples"],
+    summary="Archive an owned soil test record",
+    response_model=SoilTestResultRead,
+    dependencies=[Depends(require_scope("soil:write"))],
+)
+async def archive_soil_test_result(
+    request: Request,
+    sample_id: str,
+    db: AsyncSession = Depends(get_db_session),
+) -> SoilTestResult:
+    principal = _principal(request)
+    sample = await _get_owned_sample(sample_id, principal, db)
+    if sample.archived_at is None:
+        sample.archived_at = datetime.now(timezone.utc)
+        sample.archived_by_sub = principal.subject
+        await db.flush()
+    await db.refresh(sample)
+    return sample
+
+
+@router.post(
+    "/soil-samples/{sample_id}/restore",
+    tags=["Soil samples"],
+    summary="Restore an owned archived soil test record",
+    response_model=SoilTestResultRead,
+    dependencies=[Depends(require_scope("soil:write"))],
+)
+async def restore_soil_test_result(
+    request: Request,
+    sample_id: str,
+    db: AsyncSession = Depends(get_db_session),
+) -> SoilTestResult:
+    sample = await _get_owned_sample(sample_id, _principal(request), db)
+    sample.archived_at = None
+    sample.archived_by_sub = None
+    await db.flush()
+    await db.refresh(sample)
+    return sample
+
+
+@router.get(
+    "/soil-samples/{sample_id}/access",
+    tags=["Soil samples"],
+    summary="List users with access to an owned soil sample",
+    response_model=list[SampleAccessRead],
+)
+async def list_sample_access(
+    request: Request,
+    sample_id: str,
+    db: AsyncSession = Depends(get_db_session),
+) -> list[SampleAccessRead]:
+    db_sample = await _get_owned_sample(sample_id, _principal(request), db)
+    records = (await db.scalars(select(SoilSampleAccess).where(SoilSampleAccess.soil_sample_id == db_sample.id).order_by(SoilSampleAccess.user_email))).all()
+    return [SampleAccessRead(email=record.user_email, role=record.role, granted_at=record.created_at) for record in records]
+
+
+@router.post(
+    "/soil-samples/{sample_id}/access",
+    tags=["Soil samples"],
+    summary="Grant a user access to an owned soil sample",
+    response_model=SampleAccessRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("soil:write"))],
+)
+async def grant_sample_access(
+    request: Request,
+    sample_id: str,
+    grant: SampleAccessGrant,
+    db: AsyncSession = Depends(get_db_session),
+) -> SampleAccessRead:
+    principal = _principal(request)
+    db_sample = await _get_owned_sample(sample_id, principal, db)
+    email = str(grant.email).strip().lower()
+    if principal.email == email:
+        raise HTTPException(status_code=400, detail="The owner already has access")
+    record = await db.scalar(select(SoilSampleAccess).where(
+        SoilSampleAccess.soil_sample_id == db_sample.id,
+        func.lower(SoilSampleAccess.user_email) == email,
+    ))
+    if record is None:
+        record = SoilSampleAccess(soil_sample_id=db_sample.id, user_email=email, role=grant.role, granted_by_sub=principal.subject)
+        db.add(record)
+    else:
+        record.role = grant.role
+        record.granted_by_sub = principal.subject
+    await db.flush()
+    await db.refresh(record)
+    return SampleAccessRead(email=record.user_email, role=record.role, granted_at=record.created_at)
+
+
+@router.delete(
+    "/soil-samples/{sample_id}/access/{email}",
+    tags=["Soil samples"],
+    summary="Revoke a user's access to an owned soil sample",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    dependencies=[Depends(require_scope("soil:write"))],
+)
+async def revoke_sample_access(
+    request: Request,
+    sample_id: str,
+    email: str,
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    db_sample = await _get_owned_sample(sample_id, _principal(request), db)
+    record = await db.scalar(select(SoilSampleAccess).where(
+        SoilSampleAccess.soil_sample_id == db_sample.id,
+        func.lower(SoilSampleAccess.user_email) == email.strip().lower(),
+    ))
+    if record is not None:
+        await db.delete(record)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
@@ -424,6 +701,7 @@ async def create_sample_provenance(
     dependencies=[Depends(require_scope("batch:upload"))],
 )
 async def upload_soil_batch(
+    request: Request,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db_session),
 ) -> SoilSampleBatch:
@@ -560,6 +838,7 @@ async def upload_soil_batch(
                 latitude=latitude,
                 longitude=longitude,
                 location=make_wgs84_point(latitude, longitude),
+                created_by_sub=_principal(request).subject,
             )
             soil_row = SoilTestResult(**sample_data)
             soil_rows.append(soil_row)

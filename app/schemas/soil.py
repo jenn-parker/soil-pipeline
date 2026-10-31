@@ -83,3 +83,5 @@ class SoilTestResultCreate(SoilTestResultBase):
 
 class SoilTestResultRead(SoilTestResultBase):
     id: int
+    archived_at: datetime | None = None
+    archived_by_sub: str | None = None

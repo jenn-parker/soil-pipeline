@@ -168,6 +168,36 @@ Open <http://localhost:8000/auth/login> to sign in through Cognito Managed Login
 
 The Cognito validator accepts only signed access tokens issued by the configured User Pool, checks `token_use=access`, validates the app client ID, and enforces the route scopes. The Kubernetes manifest uses Cognito mode and requires the Terraform Cognito outputs plus a strong `AUTH_SESSION_SECRET` to replace its placeholders before deployment.
 
+### Sample ownership and sharing
+
+New samples and CSV batches record the authenticated Cognito user's stable `sub`
+as the creator. Existing SSURGO demo records have no creator and remain visible
+as shared reference data. A creator can update or delete their own samples and
+grant another signed-in user either `viewer` or `editor` access by email. Email
+is normalized for sharing lookup, while Cognito `sub` remains the ownership
+identifier because email addresses can change.
+
+Map and report queries are scoped to reference records, owned records, and
+records shared with the current user. The sample management routes are:
+
+- `GET /api/v1/soil-samples/{sample_id}` — read an accessible sample.
+- `PUT /api/v1/soil-samples/{sample_id}` — update an owned or editor-shared sample.
+- `DELETE /api/v1/soil-samples/{sample_id}` — delete an owned sample.
+- `GET|POST /api/v1/soil-samples/{sample_id}/access` — list or grant access as the owner.
+- `DELETE /api/v1/soil-samples/{sample_id}/access/{email}` — revoke access as the owner.
+
+Owners can archive a sample with `POST /api/v1/soil-samples/{sample_id}/archive`.
+Archived samples are excluded from maps, reports, and normal sample reads while
+remaining in the database with their ownership and sharing history intact.
+Owners can restore them with `POST /api/v1/soil-samples/{sample_id}/restore`.
+The dashboard exposes the archive confirmation flow from an owned sample's map
+popup. Hard deletion remains available as a separate owner-only API operation.
+
+The dashboard exposes edit, access-management, and archive links only for
+samples where the authenticated user has the corresponding capability. The
+ownership and archive schema changes are applied by Alembic revisions
+`20261101_0002` and `20261101_0003`.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/v1/soil-samples` | Create one soil sample from a JSON body. |

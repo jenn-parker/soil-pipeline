@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import asyncio
+import httpx
 from dataclasses import dataclass
 from typing import Callable
 
@@ -29,6 +30,7 @@ _jwk_clients: dict[str, PyJWKClient] = {}
 class Principal:
     subject: str
     scopes: frozenset[str]
+    email: str | None = None
 
 
 def _configured_api_keys() -> dict[str, frozenset[str]]:
@@ -114,9 +116,26 @@ async def _authenticate_cognito(token: str) -> Principal:
     if claims.get("client_id") != app_client_id:
         raise ValueError("Cognito token was issued to a different app client")
 
+    email = None
+    login_domain = os.getenv("COGNITO_LOGIN_DOMAIN", "").strip().rstrip("/")
+    if login_domain:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                userinfo_response = await client.get(
+                    f"{login_domain}/oauth2/userInfo",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if userinfo_response.is_success:
+                userinfo = userinfo_response.json()
+                if isinstance(userinfo.get("email"), str):
+                    email = userinfo["email"].strip().lower()
+        except (httpx.HTTPError, ValueError):
+            logger.info("auth.userinfo.unavailable", extra={"subject": str(claims["sub"])})
+
     return Principal(
         subject=str(claims["sub"]),
         scopes=_cognito_scopes(claims),
+        email=email,
     )
 
 
@@ -147,6 +166,7 @@ async def get_current_principal(
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
         actor_id_context.set(principal.subject)
+        request.state.principal = principal
         return principal
 
     if provider != "api_key":
@@ -185,6 +205,7 @@ async def get_current_principal(
 
     principal = Principal(subject=_subject_for_key(credentials.credentials), scopes=scopes)
     actor_id_context.set(principal.subject)
+    request.state.principal = principal
     return principal
 
 

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from geoalchemy2 import Geography
 from geoalchemy2.elements import WKBElement, WKTElement
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, Numeric, String
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
@@ -18,6 +18,9 @@ class SoilTestResult(Base):
     # Metadata & Geography
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("soil_upload_batches.id"), nullable=True, index=True)
+    created_by_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    archived_by_sub: Mapped[str | None] = mapped_column(String(255), nullable=True)
     location: Mapped[WKBElement | WKTElement | None] = mapped_column(
         Geography(geometry_type="POINT", srid=4326), nullable=True
     )
@@ -78,3 +81,15 @@ class SoilTestResult(Base):
     provenance: Mapped["SampleProvenance | None"] = relationship(
         back_populates="soil_test_result", uselist=False
     )
+
+
+class SoilSampleAccess(Base):
+    __tablename__ = "soil_sample_access"
+    __table_args__ = (Index("ix_soil_sample_access_sample_email", "soil_sample_id", "user_email", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    soil_sample_id: Mapped[int] = mapped_column(ForeignKey("soil_samples.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="viewer")
+    granted_by_sub: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
