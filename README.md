@@ -6,6 +6,20 @@ Licensed under the [MIT License](LICENSE).
 
 A containerized FastAPI service for creating soil sample records, identifying sample owners and collectors, and importing soil samples from CSV batches. It uses PostgreSQL/PostGIS through SQLAlchemy's async engine and archives uploaded CSV files in S3-compatible object storage.
 
+## Contents
+
+- [Architecture and capabilities](#architecture-and-capabilities)
+- [Product walkthrough](#product-walkthrough)
+- [Demo soil data and attribution](#demo-soil-data-and-attribution)
+- [Run locally with Docker Compose](#run-locally-with-docker-compose)
+- [Run the API without Docker](#run-the-api-without-docker)
+- [API documentation](#api-documentation)
+- [Tests](#tests)
+- [Database migrations](#database-migrations)
+- [API routes](#api-routes)
+  - [Authentication and authorization](#authentication-and-authorization)
+  - [Sample ownership and sharing](#sample-ownership-and-sharing)
+
 ## Architecture and capabilities
 
 - FastAPI endpoints with Pydantic request validation.
