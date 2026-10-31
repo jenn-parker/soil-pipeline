@@ -16,13 +16,17 @@
       header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.8rem 1rem; background: #f4f7f2; }
       h1 { margin: 0; font-size: 1.1rem; }
       #status { color: #52645d; font-size: 0.9rem; }
+      #token { min-width: 18rem; padding: 0.35rem; }
+      #login { color: #245b45; }
       #map { height: calc(100vh - 58px); min-height: 360px; }
     </style>
   </head>
   <body>
     <header>
       <h1>Soil sample locations</h1>
-      <div id="status" role="status">Loading samples…</div>
+      <label>API token <input id="token" type="password" autocomplete="off" placeholder="Optional bearer token" /></label>
+      <a id="login" href="/auth/login">Sign in with Cognito</a>
+      <div id="status" role="status">Enter a token to load samples.</div>
     </header>
     <div id="map" aria-label="Map of soil sample locations"></div>
     <script
@@ -39,8 +43,15 @@
 
       const markers = L.layerGroup().addTo(map);
       const status = document.getElementById("status");
+      const tokenInput = document.getElementById("token");
+      tokenInput.value = sessionStorage.getItem("soil-api-token") || "";
+      tokenInput.addEventListener("change", () => {
+        sessionStorage.setItem("soil-api-token", tokenInput.value.trim());
+        loadSamples();
+      });
       let requestId = 0;
       async function loadSamples() {
+        const token = tokenInput.value.trim();
         const id = ++requestId;
         const bounds = map.getBounds();
         const params = new URLSearchParams({
@@ -49,7 +60,9 @@
         });
         status.textContent = "Loading samples…";
         try {
-          const response = await fetch(`/api/v1/maps/soil-samples?${params}`);
+          const response = await fetch(`/api/v1/maps/soil-samples?${params}`, token ? {
+            headers: { Authorization: `Bearer ${token}` }
+          } : {});
           if (!response.ok) throw new Error(`Request failed (${response.status})`);
           const data = await response.json();
           if (id !== requestId) return;

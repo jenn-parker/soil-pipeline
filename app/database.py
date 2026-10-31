@@ -11,7 +11,7 @@ DATABASE_URL = os.getenv(
 # 1. Create the Async Engine
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True,  # Useful for debugging SQL output in your terminal during development
+    echo=os.getenv("SQL_ECHO", "false").lower() == "true",
     future=True
 )
 

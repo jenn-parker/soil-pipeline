@@ -10,6 +10,9 @@ from app.database import get_db_session
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
+    import os
+
+    os.environ["AUTH_API_KEYS"] = "test-key=soil:read,soil:write,batch:upload"
     app = FastAPI()
     app.include_router(router)
 
@@ -17,5 +20,5 @@ def client() -> Iterator[TestClient]:
         yield object()
 
     app.dependency_overrides[get_db_session] = override_db_session
-    with TestClient(app) as test_client:
+    with TestClient(app, headers={"Authorization": "Bearer test-key"}) as test_client:
         yield test_client

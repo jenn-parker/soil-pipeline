@@ -1,7 +1,9 @@
 import csv
 import io
+import logging
 import uuid
 from datetime import datetime, timezone
+from time import perf_counter
 
 from geoalchemy2 import Geography, Geometry
 from geoalchemy2.elements import WKTElement
@@ -12,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db_session
+from app.auth import require_scope
 from app.models.batch import SoilSampleBatch
 from app.models.sample import Party, SampleProvenance
 from app.models.soil import SoilTestResult
@@ -41,7 +44,8 @@ from app.services.recommendations import (
 )
 from app.services.object_storage import archive_batch_upload
 
-router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_scope("soil:read"))])
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 SOIL_MEASUREMENTS = (
     "soil_ph",
@@ -257,6 +261,7 @@ async def get_soil_samples_geojson(
     description="Create one soil test record from a JSON request body.",
     response_model=SoilTestResultRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("soil:write"))],
 )
 async def create_soil_test_result(
     sample: SoilTestResultCreate,
@@ -307,6 +312,7 @@ async def create_soil_test_result(
     description="Create an owner or collector record.",
     response_model=PartyRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("soil:write"))],
 )
 async def create_party(
     party: PartyCreate,
@@ -325,6 +331,7 @@ async def create_party(
     summary="Create sample provenance details",
     response_model=SampleProvenanceRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("soil:write"))],
 )
 async def create_sample_provenance(
     sample: SampleProvenanceCreate,
@@ -406,13 +413,19 @@ async def create_sample_provenance(
     ),
     response_model=SoilSampleBatchRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("batch:upload"))],
 )
 async def upload_soil_batch(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db_session),
 ) -> SoilSampleBatch:
+    started_at = perf_counter()
     filename = (file.filename or "upload.csv").rsplit("/", 1)[-1].rsplit("\\", 1)[-1][:255]
     contents = await file.read(MAX_UPLOAD_BYTES + 1)
+    logger.info(
+        "batch.upload.started",
+        extra={"filename": filename, "upload_size_bytes": len(contents)},
+    )
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="CSV uploads must be 10 MB or smaller")
     try:
@@ -482,6 +495,16 @@ async def upload_soil_batch(
                     })
 
     accepted_rows = 0 if row_errors else len(valid_samples)
+    logger.info(
+        "batch.validation.completed",
+        extra={
+            "filename": filename,
+            "total_rows": total_rows,
+            "accepted_rows": accepted_rows,
+            "rejected_rows": total_rows - accepted_rows,
+            "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+        },
+    )
     batch = SoilSampleBatch(
         filename=filename,
         status="rejected" if row_errors else "completed",
@@ -562,9 +585,21 @@ async def upload_soil_batch(
             object_key=f"soil-batches/{uuid.uuid4()}/{filename}",
         )
     except RuntimeError as exc:
+        logger.exception("batch.archive.failed", extra={"batch_id": batch.id, "filename": filename})
         raise HTTPException(status_code=503, detail="Batch file storage is temporarily unavailable") from exc
 
     await db.refresh(batch)
+    logger.info(
+        "batch.completed",
+        extra={
+            "batch_id": batch.id,
+            "status": batch.status,
+            "total_rows": batch.total_rows,
+            "accepted_rows": batch.accepted_rows,
+            "rejected_rows": batch.rejected_rows,
+            "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+        },
+    )
     return batch
 
 

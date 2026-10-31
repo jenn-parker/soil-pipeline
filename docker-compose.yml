@@ -8,6 +8,14 @@ services:
       - ./app:/app/app
     environment:
       - DATABASE_URL=postgresql+asyncpg://earth_user:earth_password@db:5432/soil_db
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-api_key}
+      - AUTH_API_KEYS=${AUTH_API_KEYS:-local-demo-key=soil:read,soil:write,batch:upload}
+      - COGNITO_ISSUER=${COGNITO_ISSUER:-}
+      - COGNITO_APP_CLIENT_ID=${COGNITO_APP_CLIENT_ID:-}
+      - COGNITO_LOGIN_DOMAIN=${COGNITO_LOGIN_DOMAIN:-}
+      - COGNITO_REDIRECT_URI=${COGNITO_REDIRECT_URI:-http://localhost:8000/auth/callback}
+      - COGNITO_LOGOUT_URI=${COGNITO_LOGOUT_URI:-http://localhost:8000/}
+      - AUTH_SESSION_SECRET=${AUTH_SESSION_SECRET:-local-development-session-secret-change-me}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
