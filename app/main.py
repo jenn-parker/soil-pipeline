@@ -1,4 +1,3 @@
-from contextlib import asynccontextmanager
 import logging
 from pathlib import Path
 
@@ -8,19 +7,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
 from app.api.routes import router
-from app.database import Base, engine
+from app.database import engine
 from app.models.batch import SoilSampleBatch  # noqa: F401
 from app.models.sample import Party, SampleProvenance  # noqa: F401
 from app.models.soil import SoilTestResult  # noqa: F401
 
 logger = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
 
 
 app = FastAPI(
@@ -41,7 +33,6 @@ app = FastAPI(
         {"name": "Reports", "description": "Location-based summaries of soil test results."},
         {"name": "Mapping", "description": "Map-ready GeoJSON for soil sample locations."},
     ],
-    lifespan=lifespan,
 )
 app.include_router(router)
 

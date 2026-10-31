@@ -7,7 +7,7 @@ from geoalchemy2 import Geography, Geometry
 from geoalchemy2.elements import WKTElement
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import ValidationError
-from sqlalchemy import cast, func, select
+from sqlalchemy import case, cast, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -426,7 +426,7 @@ async def upload_soil_batch(
     if len(set(reader.fieldnames)) != len(reader.fieldnames):
         raise HTTPException(status_code=400, detail="CSV contains duplicate column headers")
 
-    valid_samples: list[SoilTestResultCreate] = []
+    valid_samples: list[tuple[int, SoilTestResultCreate]] = []
     row_errors: list[dict[str, object]] = []
     sample_ids: set[str] = set()
     total_rows = 0
@@ -445,7 +445,7 @@ async def upload_soil_batch(
                 if sample.sample_id in sample_ids:
                     raise ValueError("sample_id is duplicated within this file")
                 sample_ids.add(sample.sample_id)
-                valid_samples.append(sample)
+                valid_samples.append((row_number, sample))
             except (ValidationError, ValueError) as exc:
                 if isinstance(exc, ValidationError):
                     details = [
@@ -470,7 +470,7 @@ async def upload_soil_batch(
             (await db.scalars(select(SoilTestResult.sample_id).where(SoilTestResult.sample_id.in_(sample_ids)))).all()
         )
         if existing_ids:
-            for row_number, sample in enumerate(valid_samples, start=2):
+            for row_number, sample in valid_samples:
                 if sample.sample_id in existing_ids:
                     row_errors.append({
                         "row": row_number,
@@ -508,7 +508,7 @@ async def upload_soil_batch(
         }
         soil_rows: list[SoilTestResult] = []
         linked_rows: list[tuple[SampleProvenance, SoilTestResult]] = []
-        for sample in valid_samples:
+        for _, sample in valid_samples:
             provenance = provenance_by_sample_id.get(sample.sample_id)
             if provenance is not None and provenance.soil_sample_id is not None:
                 raise HTTPException(
@@ -534,10 +534,27 @@ async def upload_soil_batch(
             soil_rows.append(soil_row)
             if provenance is not None:
                 linked_rows.append((provenance, soil_row))
+        
         db.add_all(soil_rows)
         await db.flush()
-        for provenance, soil_row in linked_rows:
-            provenance.soil_sample_id = soil_row.id
+        
+        provenance_updates = {
+            provenance.id: soil_row.id
+            for provenance, soil_row in linked_rows
+        }
+        if provenance_updates:
+            from sqlalchemy import update, case
+            await db.execute(
+                update(SampleProvenance)
+                .where(SampleProvenance.id.in_(provenance_updates))
+                .values(
+                    soil_sample_id=case(
+                        provenance_updates,
+                        value=SampleProvenance.id,
+                    )
+                )
+                .execution_options(synchronize_session=False)
+            )
 
     try:
         batch.source_bucket, batch.source_key = await archive_batch_upload(
@@ -549,6 +566,7 @@ async def upload_soil_batch(
 
     await db.refresh(batch)
     return batch
+
 
 
 @router.get(

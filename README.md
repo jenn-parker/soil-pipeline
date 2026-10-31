@@ -1,10 +1,21 @@
 # Soil Metric Ingestion Pipeline
 
-FastAPI service for creating soil sample records, identifying sample owners and collectors, and importing soil samples from CSV batches. The API uses PostgreSQL through SQLAlchemy's async engine.
+A containerized FastAPI service for creating soil sample records, identifying sample owners and collectors, and importing soil samples from CSV batches. It uses PostgreSQL/PostGIS through SQLAlchemy's async engine and archives uploaded CSV files in S3-compatible object storage.
+
+## Architecture and capabilities
+
+- FastAPI endpoints with Pydantic request validation.
+- PostgreSQL and PostGIS for relational data and spatial queries.
+- A GiST index on `soil_samples.location` for location-based reports and map queries.
+- S3-compatible archival of accepted CSV uploads through LocalStack in local development or AWS S3 in a deployed environment.
+- Optional, request-level AI explanations using aggregate soil measurements and caller-provided management context.
+- A starter Kubernetes manifest for deployment to an existing EKS environment; it does not provision AWS infrastructure.
+
+The repository contains application code, Alembic migrations, legacy raw SQL migrations, tests, a Dockerfile, a local Compose environment, and a starter Kubernetes manifest. It does not include a CI workflow or a complete EKS/Terraform configuration.
 
 ## Run locally with Docker Compose
 
-Requirements: Docker Desktop or another Docker Engine with the Compose plugin.
+Requirements: OrbStack or another Docker-compatible engine with the Compose plugin. Docker Desktop is not required if OrbStack is installed.
 
 LocalStack also requires an auth token. Get one from the [LocalStack web app](https://app.localstack.cloud), then export it in your shell before starting Compose. Keep the token private and do not commit it to the repository. Leave it set in that same shell for later `docker compose` commands, including `logs`, `exec`, and `down`, because Compose reads the variable when it evaluates the configuration.
 
@@ -13,7 +24,9 @@ export LOCALSTACK_AUTH_TOKEN='YOUR_LOCALSTACK_AUTH_TOKEN'
 docker compose up --build
 ```
 
-The API listens on <http://localhost:8000>. Compose starts PostgreSQL 16/PostGIS and LocalStack. The PostGIS service is pinned to `linux/amd64` because the selected official image does not publish an ARM64 build; on Apple Silicon it runs under emulation and may be slower. The API uses PostGIS for relational and geospatial sample queries, and archives CSV uploads in S3. LocalStack creates the `soil-pipeline-batches` bucket (configurable with `S3_BATCH_BUCKET`) and persists its data in a named volume. LocalStack is exposed at <http://localhost:4566>. The local AWS credentials and database credentials are examples; do not use them in a deployed environment.
+The API listens on <http://localhost:8000>. Compose starts PostgreSQL 16/PostGIS and LocalStack. The PostGIS service is pinned to `linux/amd64` because the selected official image does not publish an ARM64 build; on Apple Silicon it runs under emulation and may be slower. LocalStack creates the `soil-pipeline-batches` bucket (configurable with `S3_BATCH_BUCKET`) and persists its data in a named volume. LocalStack is exposed at <http://localhost:4566>. The local AWS credentials and database credentials are examples; do not use them in a deployed environment.
+
+Compose runs `alembic upgrade head` before starting the development API. Alembic is the source of truth for schema changes; the legacy numbered SQL files are retained for reference and are not run by Compose. For production, apply the Alembic migrations as a deployment step or migration job before starting API replicas.
 
 Inspect local S3 objects with the AWS CLI (or `awslocal` if installed):
 
@@ -31,12 +44,12 @@ To also delete the local database and S3 volumes and their data, run `docker com
 
 ## Run the API without Docker
 
-Use Python 3.11 and a running PostgreSQL database. From the repository root:
+Use a local Python environment (Python 3.12 is the current recommended development version) and a running PostgreSQL database. The Dockerfile currently uses Python 3.11. From the repository root:
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
 export DATABASE_URL='postgresql+asyncpg://USER:PASSWORD@localhost:5432/soil_db'
 export AWS_ENDPOINT_URL_S3='http://localhost:4566'
 export AWS_REGION='us-east-1'
@@ -46,7 +59,18 @@ export S3_BATCH_BUCKET='soil-pipeline-batches'
 uvicorn app.main:app --reload
 ```
 
-The database must have PostGIS installed and the extension enabled before starting the app. The S3 endpoint and bucket must also be available for CSV uploads; start Compose's LocalStack service with `docker compose up localstack` or point these settings to an AWS account. On a fresh database, apply [migration 000](migrations/000_enable_postgis.sql); the current app startup then creates missing tables. On an existing database, apply migrations 000 through 004 in order; `create_all` does not add columns or indexes or alter existing column types. Migration 004 converts existing timezone-naive `sampled_at` values to UTC-aware timestamps, assuming the stored naive values represent UTC. The database role must be allowed to create the PostGIS extension, or an administrator should install it first. Production should run schema migrations as a deployment step rather than relying on each API replica's startup `create_all` call.
+The database must have PostGIS installed and the extension enabled before starting the app. The S3 endpoint and bucket must also be available for CSV uploads; start Compose's LocalStack service with `docker compose up localstack` or point these settings to an AWS account. Alembic's initial revision creates PostGIS, the current application tables, and their indexes. Existing databases created by the former `create_all()` workflow should be checked against the current models and then stamped at the current revision rather than replaying the initial `CREATE TABLE` migration:
+
+```bash
+docker compose run --rm web alembic stamp head
+```
+
+Only use that stamping command when the existing schema already matches the current models. For a disposable local database, reset the volumes and let Compose recreate everything:
+
+```bash
+docker compose down --volumes
+docker compose up --build
+```
 
 ## API documentation
 
@@ -66,6 +90,24 @@ python -m pytest
 ```
 
 The suite covers request validation, recommendation status and opt-in behavior, and S3 client configuration/error handling. Database queries and S3 calls are mocked, so these tests do not require a running PostgreSQL/PostGIS or LocalStack service.
+
+## Database migrations
+
+Alembic is the schema migration tool for new changes. The database URL is read from `DATABASE_URL`, which uses the same async PostgreSQL URL as the application:
+
+```bash
+alembic upgrade head
+alembic current
+alembic history
+```
+
+Create a new revision after changing the SQLAlchemy models, review the generated operations, and test both upgrade and downgrade paths before applying it to a shared database:
+
+```bash
+alembic revision --autogenerate -m "describe the schema change"
+```
+
+The initial Alembic revision represents the current application schema. The older files in `migrations/` document the pre-Alembic migration history and should not be applied on top of a database already managed by Alembic.
 
 ## API routes
 
@@ -127,7 +169,7 @@ The Dockerfile builds the API image and runs Uvicorn without reload as a non-roo
 docker build -t soil-pipeline:local .
 ```
 
-Compose overrides the container command to enable reload and mounts the source tree for development. The standalone image is intended for deployment and does not include that development mount.
+Compose overrides the container command to run `alembic upgrade head`, then enable Uvicorn reload, and mounts the source tree for development. The standalone image includes the Alembic configuration and revisions but does not automatically run migrations; production should invoke Alembic as a separate deployment step or migration job. The standalone image does not include the Compose development mount.
 
 ## Deploying to EKS
 
@@ -152,7 +194,7 @@ Compose overrides the container command to enable reload and mounts the source t
    ```
 
    The SSL context verifies the server certificate and hostname. Obtain the current AWS RDS CA bundle from AWS, make it available in the API container (for example, mount it read-only from a Kubernetes ConfigMap), and set `DATABASE_SSL_CA` to its mounted path. Keep the CA bundle current according to AWS certificate rotation notices. For production, require this setting at startup rather than silently allowing an unverified or plaintext connection. The RDS PostgreSQL SSL guide covers `verify-full` and CA trust requirements: <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL.Concepts.General.SSL.html>.
-6. Apply the database schema before starting the API. Migration 000 enables PostGIS; migrations 001 through 004 add batch and spatial/link columns and convert `sampled_at` to a timezone-aware UTC column. **The repository does not yet include a baseline migration for the core model tables**; migrations 001 and 002 assume those tables already exist. Add and review a baseline migration for the current models, then run migration 000, the baseline, and migrations 001 through 004 in order. Migration 004 assumes existing naive `sampled_at` values represent UTC. The startup `Base.metadata.create_all()` only creates missing tables and does not upgrade existing tables, so use a migration step/job for deployments and do not rely on every API replica to modify the schema.
+6. Apply the Alembic schema migration before starting the API. Configure `DATABASE_URL` for RDS and run `alembic upgrade head` from the image or a dedicated migration job. The initial revision creates PostGIS, the current application tables, and the GiST index. Do not run the legacy files in `migrations/` on top of an Alembic-managed database. For an existing database created by the former startup `create_all()` workflow, verify that its schema matches the current models and use `alembic stamp head` instead of replaying the initial revision. Keep schema changes in Alembic and do not rely on API replicas to modify the database at startup.
 7. Ensure the EKS cluster has the AWS Load Balancer Controller installed and configured, and verify the API can resolve and connect to the private RDS endpoint.
 8. Apply the Kubernetes manifest:
 

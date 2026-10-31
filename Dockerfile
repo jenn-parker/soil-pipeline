@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir --upgrade pip \
     && useradd --system --gid app --create-home app
 
 COPY --chown=app:app ./app ./app
+COPY --chown=app:app alembic.ini ./alembic.ini
+COPY --chown=app:app ./alembic ./alembic
 
 EXPOSE 8000
 

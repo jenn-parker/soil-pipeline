@@ -12,11 +12,6 @@ if TYPE_CHECKING:
 
 from app.database import Base
 
-# ==========================================
-# 1. SQLALCHEMY ORM MODELS
-# ==========================================
-
-
 class SoilTestResult(Base):
     __tablename__ = "soil_samples"
 
@@ -51,7 +46,7 @@ class SoilTestResult(Base):
     # Macronutrients
     nitrate_nitrogen_ppm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
     phosphorus_ppm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
-    phosphorus_extraction_method: Mapped[str | None] = mapped_column(String(50), nullable=True)  # Bray, Mehlich-3, Olsen
+    phosphorus_extraction_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
     potassium_ppm: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
 
     # Secondary Nutrients
