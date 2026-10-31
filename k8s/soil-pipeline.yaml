@@ -14,6 +14,7 @@ spec:
       labels:
         app: soil-pipeline
     spec:
+      serviceAccountName: soil-pipeline
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -32,6 +33,23 @@ spec:
             - name: tmp
               mountPath: /tmp
           env:
+            - name: AUTH_PROVIDER
+              value: cognito
+            - name: COGNITO_ISSUER
+              value: REPLACE_WITH_COGNITO_ISSUER
+            - name: COGNITO_APP_CLIENT_ID
+              value: REPLACE_WITH_COGNITO_APP_CLIENT_ID
+            - name: COGNITO_LOGIN_DOMAIN
+              value: REPLACE_WITH_COGNITO_LOGIN_DOMAIN
+            - name: COGNITO_REDIRECT_URI
+              value: REPLACE_WITH_PUBLIC_API_URL/auth/callback
+            - name: COGNITO_LOGOUT_URI
+              value: REPLACE_WITH_PUBLIC_API_URL/
+            - name: AUTH_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: soil-pipeline-secrets
+                  key: AUTH_SESSION_SECRET
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -76,6 +94,11 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: soil-pipeline
 ---
 apiVersion: v1
 kind: Service

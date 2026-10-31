@@ -21,3 +21,8 @@ htmlcov/
 
 # macOS metadata
 .DS_Store
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfvars
+infra/crash.log

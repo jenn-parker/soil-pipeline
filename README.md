@@ -113,6 +113,41 @@ The initial Alembic revision represents the current application schema. The olde
 
 All application routes are prefixed with `/api/v1`.
 
+### Authentication and authorization
+
+The API supports two authentication providers. Local Compose uses bearer API keys by default. Configure `AUTH_API_KEYS` as a semicolon-separated list of `key=scope,scope` entries. Compose supplies a development-only default key named `local-demo-key`; replace it before sharing the service:
+
+```bash
+export AUTH_API_KEYS='replace-with-a-long-random-key=soil:read,soil:write,batch:upload'
+docker compose up --build
+```
+
+Send the key as an authorization header:
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-key' \
+  'http://localhost:8000/api/v1/reports/soil-ranges?latitude=41.88&longitude=-93.10&radius_km=10'
+```
+
+All `/api/v1` routes require `soil:read`. Create and upload operations additionally require `soil:write` or `batch:upload`. Liveness and readiness endpoints remain unauthenticated for container orchestration. The `/map` page is public, but its data request requires a token entered into the page and kept only in session storage.
+
+This API-key mechanism is intentionally lightweight for the demo. A production deployment should replace it with JWT validation against an OIDC provider such as Amazon Cognito while retaining the route-level scopes.
+
+The Terraform configuration provisions an Amazon Cognito User Pool, an OAuth app client, and the custom scopes used by the API. To use the real Cognito provider locally after applying Terraform, set the outputs in the Compose environment:
+
+```bash
+export AUTH_PROVIDER=cognito
+export COGNITO_ISSUER="$(terraform -chdir=infra output -raw cognito_issuer)"
+export COGNITO_APP_CLIENT_ID="$(terraform -chdir=infra output -raw cognito_app_client_id)"
+export COGNITO_LOGIN_DOMAIN="$(terraform -chdir=infra output -raw cognito_login_domain)"
+export AUTH_SESSION_SECRET="$(openssl rand -hex 32)"
+docker compose up --build
+```
+
+Open <http://localhost:8000/auth/login> to sign in through Cognito Managed Login. The callback exchanges the authorization code with PKCE, stores the access token in an HttpOnly cookie, and redirects to the map. The `/auth/logout` endpoint clears the local cookies and redirects through Cognito logout.
+
+The Cognito validator accepts only signed access tokens issued by the configured User Pool, checks `token_use=access`, validates the app client ID, and enforces the route scopes. The Kubernetes manifest uses Cognito mode and requires the Terraform Cognito outputs plus a strong `AUTH_SESSION_SECRET` to replace its placeholders before deployment.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/v1/soil-samples` | Create one soil sample from a JSON body. |
@@ -178,7 +213,7 @@ Compose overrides the container command to run `alembic upgrade head`, then enab
 1. Build and push the image to an ECR repository, then replace `REPLACE_WITH_ECR_IMAGE_URI` in the manifest with its full image URI.
 2. Replace `REPLACE_WITH_API_HOSTNAME` with the API hostname.
 3. Put RDS in private subnets in the EKS VPC. Configure the RDS security group to allow inbound TCP port 5432 from the EKS application pod security group (with Security Groups for Pods) or the EKS node security group, as appropriate for the cluster. Keep public accessibility disabled and do not allow database ingress from the public internet.
-4. Create the `soil-pipeline-secrets` Kubernetes Secret. Its `DATABASE_URL` should use the RDS endpoint, port, database name, username, and password, for example `postgresql+asyncpg://APP_USER:URL_ENCODED_PASSWORD@RDS_ENDPOINT:5432/soil_db`. URL-encode special characters in the username or password. Optionally add `OPENAI_API_KEY` to enable requested AI explanations. Use a secure secret delivery process; do not reuse local Compose credentials.
+4. Create the `soil-pipeline-secrets` Kubernetes Secret. Its `DATABASE_URL` should use the RDS endpoint, port, database name, username, and password, for example `postgresql+asyncpg://APP_USER:URL_ENCODED_PASSWORD@RDS_ENDPOINT:5432/soil_db`. Set `AUTH_SESSION_SECRET` to a long, randomly generated value for signing the OAuth state cookie. URL-encode special characters in the username or password. Optionally add `OPENAI_API_KEY` to enable requested AI explanations. Use a secure secret delivery process.
 5. Before production, configure verified TLS for the async PostgreSQL driver. The current `app/database.py` does not yet load an RDS CA bundle or pass an SSL context to `asyncpg`, so setting `DATABASE_URL` alone is not sufficient to guarantee certificate and hostname verification. A suitable implementation pattern is:
 
    ```python
