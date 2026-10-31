@@ -1,0 +1,16 @@
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+  "app/main.py",
+  "app/logging_config.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+  "^\\s*except\\b.*:",
+  "^\\s*if __name__ == .__main__.:$",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -5,7 +5,6 @@ import hmac
 import json
 import os
 import secrets
-from pathlib import Path
 from time import perf_counter
 from time import time
 from urllib.parse import urlencode
@@ -13,7 +12,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
@@ -200,7 +199,7 @@ async def auth_callback(request: Request, code: str | None = None, state: str | 
     if not isinstance(access_token, str) or not access_token:
         raise HTTPException(status_code=502, detail="Cognito did not return an access token")
 
-    response = RedirectResponse("/map")
+    response = RedirectResponse("/")
     cookie_options = {
         "httponly": True,
         "secure": _cookie_secure(),
@@ -277,11 +276,6 @@ async def request_logging_middleware(request: Request, call_next):
         )
         actor_id_context.reset(actor_token)
         request_id_context.reset(request_token)
-
-
-@app.get("/map", include_in_schema=False)
-async def sample_map() -> FileResponse:
-    return FileResponse(Path(__file__).parent / "static" / "map.html")
 
 
 @app.exception_handler(IntegrityError)

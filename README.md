@@ -1,4 +1,8 @@
-# Soil Metric Ingestion Pipeline
+# Soil Pipeline
+
+[![CI](https://github.com/jenn-parker/soil-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/jenn-parker/soil-pipeline/actions/workflows/ci.yml)
+
+Licensed under the [MIT License](LICENSE).
 
 A containerized FastAPI service for creating soil sample records, identifying sample owners and collectors, and importing soil samples from CSV batches. It uses PostgreSQL/PostGIS through SQLAlchemy's async engine and archives uploaded CSV files in S3-compatible object storage.
 
@@ -9,9 +13,27 @@ A containerized FastAPI service for creating soil sample records, identifying sa
 - A GiST index on `soil_samples.location` for location-based reports and map queries.
 - S3-compatible archival of accepted CSV uploads through LocalStack in local development or AWS S3 in a deployed environment.
 - Optional, request-level AI explanations using aggregate soil measurements and caller-provided management context.
-- A starter Kubernetes manifest for deployment to an existing EKS environment; it does not provision AWS infrastructure.
+- A Kubernetes reference manifest for a possible existing-cluster deployment; it is not the current deployment path and does not provision AWS infrastructure.
 
-The repository contains application code, Alembic migrations, legacy raw SQL migrations, tests, a Dockerfile, a local Compose environment, and a starter Kubernetes manifest. It does not include a CI workflow or a complete EKS/Terraform configuration.
+The detailed deployment architecture is documented in
+[`docs/architecture.md`](docs/architecture.md). The repeatable local demo and
+AWS foundation procedures are documented in the
+[`deployment runbook`](docs/deployment-runbook.md).
+The interview-ready walkthrough is in the
+[`demo script`](docs/demo-script.md).
+
+## Product walkthrough
+
+The application screenshots in
+[`docs/screenshots/`](docs/screenshots/) provide a quick visual overview of the
+dashboard, map interactions, sample entry, and owned-sample management flow.
+They use sanitized demo data and are kept separate from the implementation
+documentation so the README remains easy to scan. See the
+[screenshot gallery](docs/screenshots/README.md) for captions and context.
+
+The repository contains application code, Alembic migrations, legacy raw SQL migrations, tests, a Dockerfile, a local Compose environment, a CI workflow, Terraform configuration for the AWS security and storage foundation, and a starter Kubernetes manifest. The CI workflow validates backend tests, frontend lint/build, Terraform configuration, and the API Docker image on pushes to `main` and pull requests.
+
+The workflow performs validation only. It does not deploy infrastructure or application images, and it does not require AWS credentials in GitHub Actions. Deployment can be added later using GitHub OIDC and a narrowly scoped AWS role.
 
 ## Demo soil data and attribution
 
@@ -36,6 +58,18 @@ Source credit:
 ## Run locally with Docker Compose
 
 Requirements: OrbStack or another Docker-compatible engine with the Compose plugin. Docker Desktop is not required if OrbStack is installed.
+
+Create the local environment file from the committed sample, then replace the
+LocalStack token and generate a session secret:
+
+```bash
+cp .env.sample .env
+openssl rand -hex 32
+```
+
+Put the generated value in `AUTH_SESSION_SECRET`. The sample defaults to the
+API-key provider; the Cognito OAuth setup is documented below. The real `.env`
+file is ignored by Git.
 
 LocalStack also requires an auth token. Get one from the [LocalStack web app](https://app.localstack.cloud), then export it in your shell before starting Compose. Keep the token private and do not commit it to the repository. Leave it set in that same shell for later `docker compose` commands, including `logs`, `exec`, and `down`, because Compose reads the variable when it evaluates the configuration.
 
@@ -109,6 +143,11 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
+GitHub Actions reports backend coverage and requires at least 80% total
+coverage. The coverage configuration excludes application startup wiring,
+logging bootstrap, and exception-handler clauses so the threshold focuses on
+normal application behavior rather than setup and defensive plumbing.
+
 The suite covers request validation, recommendation status and opt-in behavior, and S3 client configuration/error handling. Database queries and S3 calls are mocked, so these tests do not require a running PostgreSQL/PostGIS or LocalStack service.
 
 ## Database migrations
@@ -149,7 +188,7 @@ curl -H 'Authorization: Bearer replace-with-a-long-random-key' \
   'http://localhost:8000/api/v1/reports/soil-ranges?latitude=41.88&longitude=-93.10&radius_km=10'
 ```
 
-All `/api/v1` routes require `soil:read`. Create and upload operations additionally require `soil:write` or `batch:upload`. Liveness and readiness endpoints remain unauthenticated for container orchestration. The `/map` page is public, but its data request requires a token entered into the page and kept only in session storage.
+All `/api/v1` routes require `soil:read`. Create and upload operations additionally require `soil:write` or `batch:upload`. Liveness and readiness endpoints remain unauthenticated for container orchestration. The React frontend is the application interface; its API requests use the authenticated Cognito session.
 
 This API-key mechanism is intentionally lightweight for the demo. A production deployment should replace it with JWT validation against an OIDC provider such as Amazon Cognito while retaining the route-level scopes.
 
@@ -228,7 +267,7 @@ This first pass does not calculate crop suitability or application rates; it del
 
 AI explanations are opt-in per request with `include_ai_explanation: true`. Configure `OPENAI_API_KEY` and optionally `OPENAI_MODEL` (defaults to `gpt-6-astra`) for this feature. The model receives only aggregate measurements and caller-provided management context—never exact coordinates or sample IDs—and is instructed to explain the data without prescribing rates. Do not enable it unless sending those aggregates and context to OpenAI is acceptable for your deployment. Without a configured key, an opted-in request with sample data returns `503`; requests that do not opt in remain local. No AI request is made when the search finds no samples.
 
-The map endpoint takes `west`, `south`, `east`, and `north` bounding-box coordinates, plus an optional `limit` (default 1,000; maximum 5,000). It returns GeoJSON features with sample ID, field, date, and pH properties. Open <http://localhost:8000/map> for the built-in Leaflet map. The map loads Leaflet and OpenStreetMap tiles from their public services. Soil test results and provenance records are linked by `sample_id` when they are created; the migration backfills links for existing matching records and copies provenance coordinates when a soil result has no coordinates.
+The map endpoint takes `west`, `south`, `east`, and `north` bounding-box coordinates, plus an optional `limit` (default 1,000; maximum 5,000). It returns GeoJSON features with sample ID, field, date, and pH properties. The React frontend renders the map with Leaflet and OpenStreetMap tiles. Soil test results and provenance records are linked by `sample_id` when they are created; the migration backfills links for existing matching records and copies provenance coordinates when a soil result has no coordinates.
 
 Health endpoints are available at `/health/live` and `/health/ready`. Readiness checks database connectivity.
 
@@ -256,38 +295,28 @@ docker build -t soil-pipeline:local .
 
 Compose overrides the container command to run `alembic upgrade head`, then enable Uvicorn reload, and mounts the source tree for development. The standalone image includes the Alembic configuration and revisions but does not automatically run migrations; production should invoke Alembic as a separate deployment step or migration job. The standalone image does not include the Compose development mount.
 
-## Deploying to EKS
+## Kubernetes reference template
 
-`k8s/soil-pipeline.yaml` is a starter Kubernetes Deployment, Service, and AWS Application Load Balancer Ingress. It is not a complete EKS or AWS infrastructure deployment. For the database, use Amazon RDS for PostgreSQL with a PostgreSQL version that supports the PostGIS features used by this app. Before applying the manifest:
+[`k8s/soil-pipeline.yaml`](k8s/soil-pipeline.yaml) is an untested reference
+template containing a Kubernetes Deployment, Service, and AWS Application Load
+Balancer Ingress. It is not the current deployment path for this project.
 
-1. Build and push the image to an ECR repository, then replace `REPLACE_WITH_ECR_IMAGE_URI` in the manifest with its full image URI.
-2. Replace `REPLACE_WITH_API_HOSTNAME` with the API hostname.
-3. Put RDS in private subnets in the EKS VPC. Configure the RDS security group to allow inbound TCP port 5432 from the EKS application pod security group (with Security Groups for Pods) or the EKS node security group, as appropriate for the cluster. Keep public accessibility disabled and do not allow database ingress from the public internet.
-4. Create the `soil-pipeline-secrets` Kubernetes Secret. Its `DATABASE_URL` should use the RDS endpoint, port, database name, username, and password, for example `postgresql+asyncpg://APP_USER:URL_ENCODED_PASSWORD@RDS_ENDPOINT:5432/soil_db`. Set `AUTH_SESSION_SECRET` to a long, randomly generated value for signing the OAuth state cookie. URL-encode special characters in the username or password. Optionally add `OPENAI_API_KEY` to enable requested AI explanations. Use a secure secret delivery process.
-5. Before production, configure verified TLS for the async PostgreSQL driver. The current `app/database.py` does not yet load an RDS CA bundle or pass an SSL context to `asyncpg`, so setting `DATABASE_URL` alone is not sufficient to guarantee certificate and hostname verification. A suitable implementation pattern is:
+The repository does not currently provision or operate:
 
-   ```python
-   import os
-   import ssl
+- A Kubernetes or EKS cluster.
+- Application compute or worker nodes.
+- An ECR repository or image-publishing workflow.
+- Production PostgreSQL/PostGIS or RDS.
+- A VPC, subnets, security groups, load balancer, DNS, or TLS certificate.
+- Kubernetes secrets or a production migration job.
 
-   connect_args = {}
-   ca_bundle = os.getenv("DATABASE_SSL_CA")
-   if ca_bundle:
-       connect_args["ssl"] = ssl.create_default_context(cafile=ca_bundle)
-
-   engine = create_async_engine(DATABASE_URL, connect_args=connect_args)
-   ```
-
-   The SSL context verifies the server certificate and hostname. Obtain the current AWS RDS CA bundle from AWS, make it available in the API container (for example, mount it read-only from a Kubernetes ConfigMap), and set `DATABASE_SSL_CA` to its mounted path. Keep the CA bundle current according to AWS certificate rotation notices. For production, require this setting at startup rather than silently allowing an unverified or plaintext connection. The RDS PostgreSQL SSL guide covers `verify-full` and CA trust requirements: <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL.Concepts.General.SSL.html>.
-6. Apply the Alembic schema migration before starting the API. Configure `DATABASE_URL` for RDS and run `alembic upgrade head` from the image or a dedicated migration job. The initial revision creates PostGIS, the current application tables, and the GiST index. Do not run the legacy files in `migrations/` on top of an Alembic-managed database. For an existing database created by the former startup `create_all()` workflow, verify that its schema matches the current models and use `alembic stamp head` instead of replaying the initial revision. Keep schema changes in Alembic and do not rely on API replicas to modify the database at startup.
-7. Ensure the EKS cluster has the AWS Load Balancer Controller installed and configured, and verify the API can resolve and connect to the private RDS endpoint.
-8. Apply the Kubernetes manifest:
-
-   ```bash
-   kubectl apply -f k8s/soil-pipeline.yaml
-   ```
-
-The EKS template includes readiness and liveness probes, resource requests and limits, and a restricted container security context. Configure `S3_BATCH_BUCKET` and grant the pod's IAM role permission to write objects to that bucket; leave `AWS_ENDPOINT_URL_S3` unset in AWS so the SDK uses AWS endpoints and workload credentials. The EKS cluster, VPC, ECR repository, S3 bucket, RDS instance, database subnet/security groups, DNS, TLS certificate, IAM roles, and controller are not provisioned by this repository.
+The manifest contains placeholders and assumes those external resources already
+exist. It should not be applied as-is. The supported application environment is
+local Docker Compose, and the current Terraform configuration provisions only
+the AWS authentication, storage, and IAM foundation described in
+[`docs/architecture.md`](docs/architecture.md). A future live deployment can
+choose a managed container service such as ECS/Fargate or App Runner without
+requiring EKS.
 
 ## Local AWS service choices
 
