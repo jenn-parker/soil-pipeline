@@ -2,12 +2,20 @@ import asyncio
 import os
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.database import Base
-from app.models import Party, SampleProvenance, SoilSampleBatch, SoilTestResult  # noqa: F401
+from app.migration_config import include_name, include_object
+from app.models import (  # noqa: F401
+    Party,
+    SampleProvenance,
+    SoilSampleAccess,
+    SoilSampleBatch,
+    SoilTestResult,
+)
+from geoalchemy2 import alembic_helpers
 
 
 config = context.config
@@ -25,13 +33,28 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
+        include_name=include_name,
+        include_object=include_object,
+        process_revision_directives=alembic_helpers.writer,
+        render_item=alembic_helpers.render_item,
+        compare_type=True,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_schemas=True,
+        include_name=include_name,
+        include_object=include_object,
+        process_revision_directives=alembic_helpers.writer,
+        render_item=alembic_helpers.render_item,
+        compare_type=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
 
@@ -43,6 +66,9 @@ async def run_async_migrations() -> None:
         poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:
+        # Keep extension-owned tiger/topology objects out of reflection. The
+        # PostGIS image adds these schemas to its default search path.
+        await connection.execute(text("SET search_path TO public"))
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 
