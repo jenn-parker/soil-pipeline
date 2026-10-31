@@ -228,6 +228,10 @@ async def get_soil_samples_geojson(
             SoilTestResult.field_name,
             SoilTestResult.sampled_at,
             SoilTestResult.soil_ph,
+            SoilTestResult.organic_matter_pct,
+            SoilTestResult.sand_pct,
+            SoilTestResult.silt_pct,
+            SoilTestResult.clay_pct,
             longitude,
             latitude,
         )
@@ -246,6 +250,10 @@ async def get_soil_samples_geojson(
                 field_name=row.field_name,
                 sampled_at=row.sampled_at,
                 soil_ph=row.soil_ph,
+                organic_matter_pct=row.organic_matter_pct,
+                sand_pct=row.sand_pct,
+                silt_pct=row.silt_pct,
+                clay_pct=row.clay_pct,
             ),
         )
         for row in result

@@ -24,13 +24,13 @@ variable "cognito_domain_prefix" {
 variable "cognito_callback_urls" {
   description = "Allowed OAuth callback URLs for the Cognito app client."
   type        = list(string)
-  default     = ["http://localhost:8000/auth/callback"]
+  default     = ["http://localhost:8000/auth/callback", "http://localhost:5173/auth/callback"]
 }
 
 variable "cognito_logout_urls" {
   description = "Allowed OAuth logout URLs for the Cognito app client."
   type        = list(string)
-  default     = ["http://localhost:8000/"]
+  default     = ["http://localhost:8000/", "http://localhost:5173/"]
 }
 
 variable "enable_pod_identity" {

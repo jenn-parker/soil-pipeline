@@ -13,6 +13,26 @@ A containerized FastAPI service for creating soil sample records, identifying sa
 
 The repository contains application code, Alembic migrations, legacy raw SQL migrations, tests, a Dockerfile, a local Compose environment, and a starter Kubernetes manifest. It does not include a CI workflow or a complete EKS/Terraform configuration.
 
+## Demo soil data and attribution
+
+The map demo can be populated with the records in
+[`data/seed/ssurgo-iowa-demo.csv`](data/seed/ssurgo-iowa-demo.csv). These ten
+Iowa locations are representative points derived from USDA Natural Resources
+Conservation Service (NRCS) Soil Survey Geographic Database (SSURGO) data. The
+pH, organic matter, and texture values come from the dominant component's
+surface horizon returned by the USDA Soil Data Access service.
+
+These are soil-survey representative locations, not claims that physical farm
+samples were collected at the displayed coordinates. The repository preserves
+the source description and repeatable local loader in
+[`data/seed/README.md`](data/seed/README.md) and
+[`scripts/seed_ssurgo_demo.sql`](scripts/seed_ssurgo_demo.sql).
+
+Source credit:
+
+- USDA NRCS, [Soil Survey Geographic Database (SSURGO)](https://www.nrcs.usda.gov/resources/data-and-reports/soil-survey-geographic-database-ssurgo)
+- USDA NRCS, [Soil Data Access web service](https://sdmdataaccess.sc.egov.usda.gov/WebServiceHelp.aspx)
+
 ## Run locally with Docker Compose
 
 Requirements: OrbStack or another Docker-compatible engine with the Compose plugin. Docker Desktop is not required if OrbStack is installed.

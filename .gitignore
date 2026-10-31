@@ -26,3 +26,10 @@ infra/*.tfstate
 infra/*.tfstate.*
 infra/*.tfvars
 infra/crash.log
+
+# Unused Vite starter assets
+frontend/README.md
+frontend/public/icons.svg
+frontend/src/assets/hero.png
+frontend/src/assets/react.svg
+frontend/src/assets/vite.svg

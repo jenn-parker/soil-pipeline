@@ -15,6 +15,10 @@ class SoilSampleProperties(BaseModel):
     field_name: str | None
     sampled_at: datetime
     soil_ph: Decimal | None
+    organic_matter_pct: Decimal | None
+    sand_pct: Decimal | None
+    silt_pct: Decimal | None
+    clay_pct: Decimal | None
 
 
 class SoilSampleFeature(BaseModel):
