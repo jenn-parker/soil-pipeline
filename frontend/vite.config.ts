@@ -11,6 +11,7 @@ export default defineConfig({
       '/api': 'http://localhost:8000',
       '/auth': 'http://localhost:8000',
       '/docs': 'http://localhost:8000',
+      '/openapi.json': 'http://localhost:8000',
     },
   },
 })

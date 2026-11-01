@@ -209,6 +209,16 @@ curl -H 'Authorization: Bearer replace-with-a-long-random-key' \
   'http://localhost:8000/api/v1/reports/soil-ranges?latitude=41.88&longitude=-93.10&radius_km=10'
 ```
 
+To try authenticated endpoints in Swagger UI during local development:
+
+1. Open <http://localhost:8000/docs>.
+2. Click **Authorize**.
+3. Enter `local-demo-key`.
+4. Click **Authorize**.
+
+The `local-demo-key` value is a Compose-only development credential. Replace
+it before sharing the service or deploying it anywhere.
+
 All `/api/v1` routes require `soil:read`. Create and upload operations additionally require `soil:write` or `batch:upload`. Liveness and readiness endpoints remain unauthenticated for container orchestration. The React frontend is the application interface; its API requests use the authenticated Cognito session.
 
 This API-key mechanism is intentionally lightweight for the demo. A production deployment should replace it with JWT validation against an OIDC provider such as Amazon Cognito while retaining the route-level scopes.
