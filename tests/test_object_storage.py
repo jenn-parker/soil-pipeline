@@ -83,3 +83,22 @@ def test_archive_batch_upload_wraps_s3_errors(
         import asyncio
 
         asyncio.run(object_storage.archive_batch_upload(b"csv", "batch.csv"))
+
+
+def test_discard_batch_upload_deletes_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deleted: dict[str, object] = {}
+
+    class FakeS3Client:
+        def delete_object(self, **kwargs: object) -> None:
+            deleted.update(kwargs)
+
+    monkeypatch.setenv("S3_BATCH_BUCKET", "test-batches")
+    monkeypatch.setattr(object_storage.boto3, "client", lambda *args, **kwargs: FakeS3Client())
+
+    import asyncio
+
+    asyncio.run(object_storage.discard_batch_upload("test-batches", "soil-batches/key.csv"))
+
+    assert deleted == {"Bucket": "test-batches", "Key": "soil-batches/key.csv"}

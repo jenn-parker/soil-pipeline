@@ -1,6 +1,7 @@
 import csv
 import io
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from time import perf_counter
@@ -43,7 +44,7 @@ from app.services.recommendations import (
     missing_recommendation_context,
     build_recommendation_guidance,
 )
-from app.services.object_storage import archive_batch_upload
+from app.services.object_storage import archive_batch_upload, discard_batch_upload
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_scope("soil:read"))])
@@ -710,7 +711,7 @@ async def upload_soil_batch(
     contents = await file.read(MAX_UPLOAD_BYTES + 1)
     logger.info(
         "batch.upload.started",
-        extra={"filename": filename, "upload_size_bytes": len(contents)},
+        extra={"upload_filename": filename, "upload_size_bytes": len(contents)},
     )
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="CSV uploads must be 10 MB or smaller")
@@ -784,7 +785,7 @@ async def upload_soil_batch(
     logger.info(
         "batch.validation.completed",
         extra={
-            "filename": filename,
+            "upload_filename": filename,
             "total_rows": total_rows,
             "accepted_rows": accepted_rows,
             "rejected_rows": total_rows - accepted_rows,
@@ -866,14 +867,49 @@ async def upload_soil_batch(
                 .execution_options(synchronize_session=False)
             )
 
+    object_key = f"soil-batches/{uuid.uuid4()}/{filename}"
+    archived_object: tuple[str, str] | None = None
     try:
-        batch.source_bucket, batch.source_key = await archive_batch_upload(
-            contents=contents,
-            object_key=f"soil-batches/{uuid.uuid4()}/{filename}",
-        )
+        archived_object = await archive_batch_upload(contents=contents, object_key=object_key)
+        batch.source_bucket, batch.source_key = archived_object
     except RuntimeError as exc:
-        logger.exception("batch.archive.failed", extra={"batch_id": batch.id, "filename": filename})
+        logger.exception("batch.archive.failed", extra={"batch_id": batch.id, "upload_filename": filename})
+        # A successful PUT can still be reported as failed (for example, if the
+        # response is lost), so remove the key even when archive_batch_upload
+        # raises before returning it.
+        bucket = os.getenv("S3_BATCH_BUCKET", "soil-pipeline-batches")
+        try:
+            await discard_batch_upload(bucket, object_key)
+        except RuntimeError:
+            pass
         raise HTTPException(status_code=503, detail="Batch file storage is temporarily unavailable") from exc
+
+    try:
+        # The dependency commits after the handler returns. Commit here so the
+        # handler can report failures, while treating the result as ambiguous
+        # if the connection drops during confirmation.
+        await db.commit()
+    except Exception as exc:
+        logger.exception("batch.database_commit.failed", extra={"batch_id": batch.id, "upload_filename": filename})
+        # The commit outcome is ambiguous when the connection drops after
+        # PostgreSQL commits but before the client receives confirmation. Do
+        # not delete the archive: the committed rows may already reference it.
+        # Unreferenced objects must be reconciled separately after a grace
+        # period once the database outcome can be resolved.
+        if archived_object is not None:
+            logger.error(
+                "batch.archive.retained_after_ambiguous_commit",
+                extra={
+                    "batch_id": batch.id,
+                    "s3_bucket": archived_object[0],
+                    "s3_key": archived_object[1],
+                },
+            )
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception("batch.rollback.failed", extra={"batch_id": batch.id})
+        raise HTTPException(status_code=503, detail="Batch could not be saved") from exc
 
     await db.refresh(batch)
     logger.info(

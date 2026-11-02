@@ -23,6 +23,8 @@ def configured_db() -> MagicMock:
     db.add = MagicMock()
     db.add_all = MagicMock()
     db.flush = AsyncMock()
+    db.commit = AsyncMock()
+    db.rollback = AsyncMock()
     db.refresh = AsyncMock()
     return db
 
@@ -74,3 +76,58 @@ def test_upload_accepts_valid_rows_and_assigns_owner() -> None:
     created = db.add_all.call_args.args[0][0]
     assert created.created_by_sub == "owner-sub"
     archive.assert_awaited_once()
+    db.commit.assert_awaited_once()
+
+
+def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = configured_db()
+    db.scalars = AsyncMock(side_effect=[SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])])
+    archive = AsyncMock(return_value=("bucket", "soil-batches/key.csv"))
+    db.commit.side_effect = RuntimeError("database unavailable")
+    monkeypatch.setattr(routes, "archive_batch_upload", archive)
+
+    with pytest.raises(HTTPException, match="could not be saved"):
+        asyncio.run(
+            routes.upload_soil_batch(
+                request_for_owner(),
+                upload("valid.csv", "sample_id,latitude,longitude,soil_ph\nFIELD-8,42.7,-92.4,6.5\n"),
+                db,
+            )
+        )
+
+    # The commit may have succeeded before its confirmation was lost. The
+    # archive must be retained so committed rows cannot reference a deleted
+    # object.
+    db.rollback.assert_awaited_once()
+
+
+def test_upload_cleans_up_when_s3_archive_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = configured_db()
+    db.scalars = AsyncMock(side_effect=[SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])])
+    archive = AsyncMock(side_effect=RuntimeError("S3 unavailable"))
+    discard = AsyncMock()
+    monkeypatch.setenv("S3_BATCH_BUCKET", "test-batches")
+    monkeypatch.setattr(routes, "archive_batch_upload", archive)
+    monkeypatch.setattr(routes, "discard_batch_upload", discard)
+
+    with pytest.raises(HTTPException, match="storage is temporarily unavailable") as error:
+        asyncio.run(
+            routes.upload_soil_batch(
+                request_for_owner(),
+                upload("valid.csv", "sample_id,latitude,longitude,soil_ph\nFIELD-8,42.7,-92.4,6.5\n"),
+                db,
+            )
+        )
+
+    assert error.value.status_code == 503
+    archive.assert_awaited_once()
+    discard.assert_awaited_once()
+    bucket, object_key = discard.await_args.args
+    assert bucket == "test-batches"
+    assert object_key.startswith("soil-batches/")
+    assert object_key.endswith("/valid.csv")
+    db.commit.assert_not_awaited()

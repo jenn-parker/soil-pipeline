@@ -53,6 +53,10 @@ def _upload_to_s3(contents: bytes, object_key: str) -> tuple[str, str]:
     return bucket, object_key
 
 
+def _delete_from_s3(bucket: str, object_key: str) -> None:
+    _get_s3_client().delete_object(Bucket=bucket, Key=object_key)
+
+
 async def archive_batch_upload(
     contents: bytes,
     object_key: str,
@@ -81,3 +85,15 @@ async def archive_batch_upload(
         },
     )
     return result
+
+
+async def discard_batch_upload(bucket: str, object_key: str) -> None:
+    """Best-effort compensation for an archive whose database transaction failed."""
+    try:
+        await asyncio.to_thread(_delete_from_s3, bucket, object_key)
+    except (BotoCoreError, ClientError, OSError) as exc:
+        logger.exception(
+            "S3 batch archive cleanup failed",
+            extra={"s3_bucket": bucket, "object_key": object_key},
+        )
+        raise RuntimeError("Unable to clean up the uploaded batch file") from exc
