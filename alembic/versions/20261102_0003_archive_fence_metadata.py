@@ -16,16 +16,18 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "soil_upload_batches",
-        sa.Column("archive_fenced_at", sa.DateTime(timezone=True), nullable=True),
+    # IF NOT EXISTS keeps this revision safe for databases where an earlier
+    # pre-release archive migration already added one or both columns.
+    op.execute(
+        "ALTER TABLE soil_upload_batches "
+        "ADD COLUMN IF NOT EXISTS archive_fenced_at TIMESTAMP WITH TIME ZONE"
     )
-    op.add_column(
-        "soil_upload_batches",
-        sa.Column("archive_fence_reason", sa.String(length=100), nullable=True),
+    op.execute(
+        "ALTER TABLE soil_upload_batches "
+        "ADD COLUMN IF NOT EXISTS archive_fence_reason VARCHAR(100)"
     )
 
 
 def downgrade() -> None:
-    op.drop_column("soil_upload_batches", "archive_fence_reason")
-    op.drop_column("soil_upload_batches", "archive_fenced_at")
+    op.execute("ALTER TABLE soil_upload_batches DROP COLUMN IF EXISTS archive_fence_reason")
+    op.execute("ALTER TABLE soil_upload_batches DROP COLUMN IF EXISTS archive_fenced_at")
