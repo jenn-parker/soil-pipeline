@@ -36,6 +36,13 @@ AWS foundation procedures are documented in the
 The interview-ready walkthrough is in the
 [`demo script`](docs/demo-script.md).
 
+The upload fencing and reconciliation behavior is also illustrated in the
+architecture diagrams:
+
+- [CSV upload and reconciliation flow](docs/diagrams/CSV%20Upload%20and%20Reconciliation%20Flow.md)
+- [Archive state machine](docs/diagrams/Archive%20State%20Machine.md)
+- [Diagram index](docs/diagrams/Home.md)
+
 ## Product walkthrough
 
 The application screenshots in
