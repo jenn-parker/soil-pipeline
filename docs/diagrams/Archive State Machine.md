@@ -54,4 +54,4 @@ The reconciler locks an expired pending batch row, refreshes its ORM state while
 
 A database transaction cannot atomically commit or roll back an S3 PUT. Even after a lease is fenced, a late PUT could complete. The reconciliation job therefore periodically scans the configured S3 prefix, checks database references and lease state, and deletes eligible old objects. This provides eventual cleanup without claiming cross-system atomicity.
 
-See also: [[CSV Upload and Reconciliation Flow]] · [[Home]]
+See also: [CSV Upload and Reconciliation Flow](CSV%20Upload%20and%20Reconciliation%20Flow.md) · [Diagram index](Home.md)

@@ -40,7 +40,7 @@ sequenceDiagram
             else Conditional UPDATE succeeds
                 A->>D: Commit soil data and final batch state
                 alt Commit acknowledgement is uncertain
-                    A->>A: Retain S3 archive; log failure
+                    A->>A: Retain S3 archive and log failure
                     A-->>C: HTTP 503
                 else Commit succeeds
                     A->>D: Refresh batch state
@@ -81,4 +81,4 @@ sequenceDiagram
 - Reconciliation is an **eventual** cleanup mechanism, not synchronous rollback of every external side effect.
 - A successful archive finalization can have either a `completed` or `rejected` batch outcome, depending on row validation results.
 
-See also: [[Archive State Machine]] · [[Home]]
+See also: [Archive State Machine](Archive%20State%20Machine.md) · [Diagram index](Home.md)
