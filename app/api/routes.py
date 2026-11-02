@@ -3,7 +3,7 @@ import io
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from time import perf_counter
 
 from geoalchemy2 import Geography, Geometry
@@ -49,6 +49,7 @@ from app.services.object_storage import archive_batch_upload, discard_batch_uplo
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_scope("soil:read"))])
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+ARCHIVE_LEASE_DURATION = timedelta(hours=2)
 SOIL_MEASUREMENTS = (
     "soil_ph",
     "buffer_ph",
@@ -781,29 +782,7 @@ async def upload_soil_batch(
                         }],
                     })
 
-    accepted_rows = 0 if row_errors else len(valid_samples)
-    logger.info(
-        "batch.validation.completed",
-        extra={
-            "upload_filename": filename,
-            "total_rows": total_rows,
-            "accepted_rows": accepted_rows,
-            "rejected_rows": total_rows - accepted_rows,
-            "duration_ms": round((perf_counter() - started_at) * 1000, 2),
-        },
-    )
-    batch = SoilSampleBatch(
-        filename=filename,
-        status="rejected" if row_errors else "completed",
-        total_rows=total_rows,
-        accepted_rows=accepted_rows,
-        rejected_rows=total_rows - accepted_rows,
-        errors=row_errors,
-        completed_at=datetime.now(timezone.utc),
-    )
-    db.add(batch)
-    await db.flush()
-
+    provenance_by_sample_id: dict[str, SampleProvenance] = {}
     if not row_errors:
         provenance_records = (
             await db.scalars(
@@ -816,8 +795,6 @@ async def upload_soil_batch(
             provenance.sample_id: provenance
             for provenance in provenance_records
         }
-        soil_rows: list[SoilTestResult] = []
-        linked_rows: list[tuple[SampleProvenance, SoilTestResult]] = []
         for _, sample in valid_samples:
             provenance = provenance_by_sample_id.get(sample.sample_id)
             if provenance is not None and provenance.soil_sample_id is not None:
@@ -825,6 +802,90 @@ async def upload_soil_batch(
                     status_code=409,
                     detail=f"Sample provenance {sample.sample_id} is already linked to a soil test record",
                 )
+
+    accepted_rows = 0 if row_errors else len(valid_samples)
+    logger.info(
+        "batch.validation.completed",
+        extra={
+            "upload_filename": filename,
+            "total_rows": total_rows,
+            "accepted_rows": accepted_rows,
+            "rejected_rows": total_rows - accepted_rows,
+            "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+        },
+    )
+    bucket = os.getenv("S3_BATCH_BUCKET", "soil-pipeline-batches")
+    generation = uuid.uuid4().hex
+    object_key = f"soil-batches/{generation}/{filename}"
+    lease_until = datetime.now(timezone.utc) + ARCHIVE_LEASE_DURATION
+    batch = SoilSampleBatch(
+        filename=filename,
+        status="processing",
+        total_rows=total_rows,
+        accepted_rows=accepted_rows,
+        rejected_rows=total_rows - accepted_rows,
+        errors=row_errors,
+        source_bucket=bucket,
+        source_key=object_key,
+        archive_status="pending",
+        archive_generation=generation,
+        archive_lease_until=lease_until,
+    )
+    db.add(batch)
+    await db.flush()
+
+    try:
+        await db.commit()
+    except Exception as exc:
+        logger.exception("batch.intent_commit.failed", extra={"batch_id": batch.id, "upload_filename": filename})
+        try:
+            await db.rollback()
+        except Exception:
+            logger.exception("batch.rollback.failed", extra={"batch_id": batch.id})
+        raise HTTPException(status_code=503, detail="Batch could not be prepared") from exc
+
+    archived_object: tuple[str, str] | None = None
+    try:
+        archived_object = await archive_batch_upload(contents=contents, object_key=object_key)
+    except RuntimeError as exc:
+        logger.exception("batch.archive.failed", extra={"batch_id": batch.id, "upload_filename": filename})
+        # A successful PUT can still be reported as failed (for example, if the
+        # response is lost), so remove the key even when archive_batch_upload
+        # raises before returning it.
+        try:
+            await discard_batch_upload(bucket, object_key)
+        except RuntimeError:
+            pass
+        try:
+            await db.refresh(batch)
+            batch.archive_status = "failed"
+            batch.status = "failed"
+            batch.archive_lease_until = None
+            batch.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+        except Exception:
+            logger.exception("batch.archive_failure_state_commit.failed", extra={"batch_id": batch.id})
+        raise HTTPException(status_code=503, detail="Batch file storage is temporarily unavailable") from exc
+
+    try:
+        await db.refresh(batch, with_for_update=True)
+        if (
+            batch.archive_status != "pending"
+            or batch.archive_generation != generation
+            or batch.archive_lease_until is None
+            or batch.archive_lease_until <= datetime.now(timezone.utc)
+        ):
+            batch.archive_status = "abandoned"
+            batch.status = "failed"
+            batch.archive_lease_until = None
+            await db.commit()
+            await discard_batch_upload(bucket, object_key)
+            raise HTTPException(status_code=503, detail="Batch upload lease expired")
+
+        soil_rows: list[SoilTestResult] = []
+        linked_rows: list[tuple[SampleProvenance, SoilTestResult]] = []
+        for _, sample in valid_samples:
+            provenance = provenance_by_sample_id.get(sample.sample_id)
             latitude, longitude = sample.latitude, sample.longitude
             if (
                 (latitude is None or longitude is None)
@@ -845,57 +906,31 @@ async def upload_soil_batch(
             soil_rows.append(soil_row)
             if provenance is not None:
                 linked_rows.append((provenance, soil_row))
-        
         db.add_all(soil_rows)
         await db.flush()
-        
-        provenance_updates = {
-            provenance.id: soil_row.id
-            for provenance, soil_row in linked_rows
-        }
+
+        provenance_updates = {provenance.id: soil_row.id for provenance, soil_row in linked_rows}
         if provenance_updates:
-            from sqlalchemy import update, case
             await db.execute(
                 update(SampleProvenance)
                 .where(SampleProvenance.id.in_(provenance_updates))
-                .values(
-                    soil_sample_id=case(
-                        provenance_updates,
-                        value=SampleProvenance.id,
-                    )
-                )
+                .values(soil_sample_id=case(provenance_updates, value=SampleProvenance.id))
                 .execution_options(synchronize_session=False)
             )
 
-    object_key = f"soil-batches/{uuid.uuid4()}/{filename}"
-    archived_object: tuple[str, str] | None = None
-    try:
-        archived_object = await archive_batch_upload(contents=contents, object_key=object_key)
-        batch.source_bucket, batch.source_key = archived_object
-    except RuntimeError as exc:
-        logger.exception("batch.archive.failed", extra={"batch_id": batch.id, "upload_filename": filename})
-        # A successful PUT can still be reported as failed (for example, if the
-        # response is lost), so remove the key even when archive_batch_upload
-        # raises before returning it.
-        bucket = os.getenv("S3_BATCH_BUCKET", "soil-pipeline-batches")
-        try:
-            await discard_batch_upload(bucket, object_key)
-        except RuntimeError:
-            pass
-        raise HTTPException(status_code=503, detail="Batch file storage is temporarily unavailable") from exc
-
-    try:
-        # The dependency commits after the handler returns. Commit here so the
-        # handler can report failures, while treating the result as ambiguous
-        # if the connection drops during confirmation.
+        batch.status = "rejected" if row_errors else "completed"
+        batch.completed_at = datetime.now(timezone.utc)
+        batch.archive_status = "archived"
+        batch.archive_lease_until = None
         await db.commit()
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("batch.database_commit.failed", extra={"batch_id": batch.id, "upload_filename": filename})
         # The commit outcome is ambiguous when the connection drops after
         # PostgreSQL commits but before the client receives confirmation. Do
-        # not delete the archive: the committed rows may already reference it.
-        # Unreferenced objects must be reconciled separately after a grace
-        # period once the database outcome can be resolved.
+        # not delete the archive: the durable pending lease protects it and
+        # reconciliation can resolve the state after the lease expires.
         if archived_object is not None:
             logger.error(
                 "batch.archive.retained_after_ambiguous_commit",

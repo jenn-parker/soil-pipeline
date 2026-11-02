@@ -169,7 +169,8 @@ The service integration tests are opt-in. The following workflow uses the LocalS
 ```bash
 docker compose up -d db
 lstk start
-aws --endpoint-url http://localhost.localstack.cloud:4566 s3 mb s3://soil-pipeline-batches
+aws --endpoint-url http://localhost.localstack.cloud:4566 \
+  s3 mb s3://soil-pipeline-batches 2>/dev/null || true
 
 export DATABASE_URL='postgresql+asyncpg://earth_user:earth_password@localhost:5432/soil_db'
 export AWS_ENDPOINT_URL_S3='http://localhost.localstack.cloud:4566'
@@ -188,7 +189,15 @@ To reconcile old S3 batch archives that are not referenced by PostgreSQL, run th
 python -m app.jobs.reconcile_batch_archives --grace-hours 24
 ```
 
-The job scans only `soil-batches/`, retains referenced and recent objects, and deletes only stale objects confirmed to be unreferenced. Run it from a scheduled worker or cron job with the same database and S3 configuration as the API.
+The upload flow persists a durable archive intent and a two-hour lease before writing to S3. The job scans only `soil-batches/`, retains referenced and active leased objects, fences expired pending leases, and deletes only stale objects confirmed to be unreferenced. Run it from a scheduled worker or cron job with the same database and S3 configuration as the API.
+
+For a local cron schedule, use the project virtual environment and load the ignored `.env` file so the job has the database and LocalStack settings:
+
+```cron
+*/15 * * * * cd /absolute/path/to/soil-pipeline && set -a && . ./.env && set +a && ./.venv/bin/python -m app.jobs.reconcile_batch_archives --grace-hours 24 >> /tmp/soil-pipeline-reconcile.log 2>&1
+```
+
+The job logs scan, reference, deletion, and deletion-failure counts. It exits non-zero when any deletion fails, allowing cron monitoring or a process supervisor to alert on failures.
 
 ## Database migrations
 

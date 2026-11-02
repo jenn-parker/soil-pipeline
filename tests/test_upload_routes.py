@@ -76,7 +76,7 @@ def test_upload_accepts_valid_rows_and_assigns_owner() -> None:
     created = db.add_all.call_args.args[0][0]
     assert created.created_by_sub == "owner-sub"
     archive.assert_awaited_once()
-    db.commit.assert_awaited_once()
+    assert db.commit.await_count == 2
 
 
 def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
@@ -86,7 +86,7 @@ def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
     db.scalars = AsyncMock(side_effect=[SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])])
     archive = AsyncMock(return_value=("bucket", "soil-batches/key.csv"))
     discard = AsyncMock()
-    db.commit.side_effect = RuntimeError("database unavailable")
+    db.commit.side_effect = [None, RuntimeError("database unavailable")]
     monkeypatch.setattr(routes, "archive_batch_upload", archive)
     monkeypatch.setattr(routes, "discard_batch_upload", discard)
 
@@ -102,6 +102,13 @@ def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
     # The commit may have succeeded before its confirmation was lost. The
     # archive must be retained so committed rows cannot reference a deleted
     # object.
+    batch = db.add.call_args.args[0]
+    # PostgreSQL may have committed either the pending intent or the final
+    # archived state; the important invariant is that the object is retained.
+    assert batch.archive_status == "archived"
+    assert batch.archive_generation
+    assert batch.archive_lease_until is None
+    assert batch.source_key == "soil-batches/" + batch.archive_generation + "/valid.csv"
     db.rollback.assert_awaited_once()
     discard.assert_not_awaited()
 
@@ -133,4 +140,4 @@ def test_upload_cleans_up_when_s3_archive_fails(
     assert bucket == "test-batches"
     assert object_key.startswith("soil-batches/")
     assert object_key.endswith("/valid.csv")
-    db.commit.assert_not_awaited()
+    assert db.commit.await_count == 2

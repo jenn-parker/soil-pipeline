@@ -68,21 +68,48 @@ async def reconcile_batch_archives(
         last_modified = item.get("LastModified")
         if not isinstance(object_key, str) or not object_key.startswith(BATCH_ARCHIVE_PREFIX):
             continue
+        batch = None
         if object_key in referenced_keys:
-            result = ReconciliationResult(
-                scanned=result.scanned,
-                referenced=result.referenced + 1,
-                too_recent=result.too_recent,
-                deleted=result.deleted,
-                delete_failures=result.delete_failures,
+            batch = await db.scalar(
+                select(SoilSampleBatch).where(
+                    SoilSampleBatch.source_bucket == bucket,
+                    SoilSampleBatch.source_key == object_key,
+                )
             )
-            continue
+            if batch is not None and not await _prepare_for_delete(db, batch, current_time):
+                result = ReconciliationResult(
+                    scanned=result.scanned,
+                    referenced=result.referenced + 1,
+                    too_recent=result.too_recent,
+                    deleted=result.deleted,
+                    delete_failures=result.delete_failures,
+                )
+                continue
         modified_at = _as_utc(last_modified) if isinstance(last_modified, datetime) else None
         if modified_at is None or modified_at >= cutoff:
             result = ReconciliationResult(
                 scanned=result.scanned,
                 referenced=result.referenced,
                 too_recent=result.too_recent + 1,
+                deleted=result.deleted,
+                delete_failures=result.delete_failures,
+            )
+            continue
+        # Refresh the reference immediately before deletion. This narrows the
+        # race with an upload that commits after the initial reference scan;
+        # the grace period remains the primary protection against long-running
+        # uploads because S3 deletion and PostgreSQL commit are not atomic.
+        batch = await db.scalar(
+            select(SoilSampleBatch).where(
+                SoilSampleBatch.source_bucket == bucket,
+                SoilSampleBatch.source_key == object_key,
+            )
+        )
+        if batch is not None and not await _prepare_for_delete(db, batch, current_time):
+            result = ReconciliationResult(
+                scanned=result.scanned,
+                referenced=result.referenced + 1,
+                too_recent=result.too_recent,
                 deleted=result.deleted,
                 delete_failures=result.delete_failures,
             )
@@ -116,6 +143,42 @@ async def reconcile_batch_archives(
     return result
 
 
+async def _prepare_for_delete(
+    db: AsyncSession,
+    batch: SoilSampleBatch,
+    current_time: datetime,
+) -> bool:
+    """Fence pending uploaders before allowing an object to be deleted."""
+    if batch.archive_status == "archived":
+        return False
+    if batch.archive_status == "pending":
+        if batch.archive_lease_until is not None and batch.archive_lease_until > current_time:
+            return False
+        try:
+            locked_batch = await db.scalar(
+                select(SoilSampleBatch)
+                .where(SoilSampleBatch.id == batch.id)
+                .with_for_update()
+            )
+            if locked_batch is None or locked_batch.archive_status != "pending":
+                return locked_batch is None or locked_batch.archive_status != "archived"
+            if (
+                locked_batch.archive_lease_until is not None
+                and locked_batch.archive_lease_until > current_time
+            ):
+                return False
+            locked_batch.archive_status = "abandoned"
+            locked_batch.archive_lease_until = None
+            await db.commit()
+        except Exception:
+            logger.exception(
+                "batch.archive.reconciliation_fence_failed",
+                extra={"batch_id": batch.id, "s3_key": batch.source_key},
+            )
+            return False
+    return True
+
+
 async def _run(grace_hours: float) -> ReconciliationResult:
     async with async_session_factory() as db:
         result = await reconcile_batch_archives(
@@ -138,6 +201,8 @@ def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     result = asyncio.run(_run(args.grace_hours))
     logger.info("batch.archive.reconciliation_completed", extra={"reconciliation": result.__dict__})
+    if result.delete_failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
