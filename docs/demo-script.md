@@ -29,10 +29,15 @@ Point out the dashboard, connection status, map, measurement summary, and upload
 3. Show the popup measurements and the coordinates copied into the report form.
 4. Change the **Color by** selector from pH to organic matter or texture.
 5. Run a nearby report and point out the sample count, date window, and measurement ranges.
+6. Expand **Add recommendation context**, enter `Corn`, `Iowa`, `200`, `bu/acre`, `Example Lab`, and `Mehlich-3`, then enable **Generate AI explanation** and run the soil brief. Show the returned explanation and its safety note.
 
 Say:
 
 > The map and report use the same spatial data, but the report deliberately summarizes ranges rather than pretending multiple nearby samples are one composite result.
+
+Say:
+
+> The AI feature is deliberately opt-in. It receives aggregate measurements and the context I provide, not exact coordinates or sample IDs. It explains the summary in plain language; it does not prescribe rates or replace a lab, agronomist, or extension recommendation.
 
 ## 3. Add one sample manually
 

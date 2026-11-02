@@ -28,6 +28,14 @@ type SoilRangeReport = {
   last_sampled_at: string | null
   measurements: Record<string, MeasurementRange>
 }
+type LocationRecommendation = {
+  status: 'no_local_samples' | 'context_required' | 'calibration_not_configured'
+  soil_summary: SoilRangeReport
+  missing_context: string[]
+  guidance: string[]
+  ai_assisted: boolean
+  ai_explanation: string | null
+}
 type BatchResult = {
   id: number
   filename: string
@@ -245,12 +253,19 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [colorMetric, setColorMetric] = useState<MetricKey>('soil_ph')
-  const [report, setReport] = useState<SoilRangeReport | null>(null)
+  const [recommendation, setRecommendation] = useState<LocationRecommendation | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState<string | null>(null)
   const [reportLatitude, setReportLatitude] = useState('42.03')
   const [reportLongitude, setReportLongitude] = useState('-93.62')
   const [reportRadius, setReportRadius] = useState('50')
+  const [reportCrop, setReportCrop] = useState('')
+  const [reportRegion, setReportRegion] = useState('')
+  const [reportYieldGoal, setReportYieldGoal] = useState('')
+  const [reportYieldUnit, setReportYieldUnit] = useState('')
+  const [reportSoilLab, setReportSoilLab] = useState('')
+  const [reportSoilMethod, setReportSoilMethod] = useState('')
+  const [includeAiExplanation, setIncludeAiExplanation] = useState(false)
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [uploadLoading, setUploadLoading] = useState(false)
   const [uploadResult, setUploadResult] = useState<BatchResult | null>(null)
@@ -325,11 +340,23 @@ function App() {
     setReportLoading(true)
     setReportError(null)
     try {
-      const query = new URLSearchParams({ latitude: reportLatitude, longitude: reportLongitude, radius_km: reportRadius })
-      const response = await fetch(`/api/v1/reports/soil-ranges?${query}`)
+      const payload: Record<string, string | number | boolean> = {
+        latitude: Number(reportLatitude),
+        longitude: Number(reportLongitude),
+        radius_km: Number(reportRadius),
+        include_ai_explanation: includeAiExplanation,
+      }
+      if (reportCrop) payload.crop = reportCrop
+      if (reportRegion) payload.state_province = reportRegion
+      if (reportYieldGoal) payload.yield_goal = Number(reportYieldGoal)
+      if (reportYieldUnit) payload.yield_goal_unit = reportYieldUnit
+      if (reportSoilLab) payload.soil_test_lab = reportSoilLab
+      if (reportSoilMethod) payload.soil_test_method = reportSoilMethod
+      const response = await fetch('/api/v1/recommendations/location', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (response.status === 401) throw new Error('Sign in to run a soil report.')
-      if (!response.ok) throw new Error(`The report service returned ${response.status}.`)
-      setReport(await response.json() as SoilRangeReport)
+      const result = await response.json() as LocationRecommendation | { detail?: string }
+      if (!response.ok) throw new Error('detail' in result && result.detail ? result.detail : `The recommendation service returned ${response.status}.`)
+      setRecommendation(result as LocationRecommendation)
     } catch (reason: unknown) {
       setReportError(reason instanceof Error ? reason.message : 'Unable to run the report.')
     } finally {
@@ -337,6 +364,7 @@ function App() {
     }
   }
 
+  const report = recommendation?.soil_summary
   const reportMeasurement = (name: string) => report?.measurements[name]
   const formatMeasurement = (value: number | string | null) => {
     const parsed = numericValue(value)
@@ -414,10 +442,22 @@ function App() {
           <label>Latitude<input type="number" step="any" min="-90" max="90" value={reportLatitude} onChange={(event) => setReportLatitude(event.target.value)} required /></label>
           <label>Longitude<input type="number" step="any" min="-180" max="180" value={reportLongitude} onChange={(event) => setReportLongitude(event.target.value)} required /></label>
           <label>Radius (km)<input type="number" step="any" min="0.1" max="1000" value={reportRadius} onChange={(event) => setReportRadius(event.target.value)} required /></label>
-          <button className="primary-button report-button" type="submit" disabled={reportLoading}>{reportLoading ? 'Running…' : 'Run report'}</button>
+          <details className="recommendation-context">
+            <summary>Add recommendation context</summary>
+            <div className="recommendation-fields">
+              <label>Crop<input value={reportCrop} onChange={(event) => setReportCrop(event.target.value)} placeholder="Corn" /></label>
+              <label>State / region<input value={reportRegion} onChange={(event) => setReportRegion(event.target.value)} placeholder="Iowa" /></label>
+              <label>Yield goal<input type="number" min="0" step="any" value={reportYieldGoal} onChange={(event) => setReportYieldGoal(event.target.value)} placeholder="200" /></label>
+              <label>Yield unit<input value={reportYieldUnit} onChange={(event) => setReportYieldUnit(event.target.value)} placeholder="bu/acre" /></label>
+              <label>Soil test lab<input value={reportSoilLab} onChange={(event) => setReportSoilLab(event.target.value)} placeholder="Example Lab" /></label>
+              <label>Test method<input value={reportSoilMethod} onChange={(event) => setReportSoilMethod(event.target.value)} placeholder="Mehlich-3" /></label>
+            </div>
+          </details>
+          <label className="ai-toggle"><input type="checkbox" checked={includeAiExplanation} onChange={(event) => setIncludeAiExplanation(event.target.checked)} /> Generate AI explanation <span>optional</span></label>
+          <button className="primary-button report-button" type="submit" disabled={reportLoading}>{reportLoading ? 'Preparing…' : 'Run soil brief'}</button>
         </form>
         {reportError && <p className="report-error">{reportError}</p>}
-        {report && <div className="report-result"><div className="report-result-head"><div><span className="result-label">Nearby samples</span><strong>{report.sample_count}</strong></div><span className="result-date">{report.first_sampled_at ? `Sample window: ${new Date(report.first_sampled_at).toLocaleDateString()} – ${new Date(report.last_sampled_at ?? report.first_sampled_at).toLocaleDateString()}` : 'No dated samples found'}</span></div><div className="report-measurements">{[['soil_ph', 'pH'], ['organic_matter_pct', 'Organic matter %'], ['sand_pct', 'Sand %'], ['silt_pct', 'Silt %'], ['clay_pct', 'Clay %']].map(([key, label]) => { const measurement = reportMeasurement(key); return <div key={key}><span>{label}</span><strong>{measurement ? `${formatMeasurement(measurement.minimum)}–${formatMeasurement(measurement.maximum)}` : '—'}</strong></div> })}</div></div>}
+        {recommendation && <div className="report-result"><div className="report-result-head"><div><span className="result-label">Nearby samples</span><strong>{report?.sample_count}</strong></div><span className="result-date">{report?.first_sampled_at ? `Sample window: ${new Date(report.first_sampled_at).toLocaleDateString()} – ${new Date(report.last_sampled_at ?? report.first_sampled_at).toLocaleDateString()}` : 'No dated samples found'}</span></div><div className="report-measurements">{[['soil_ph', 'pH'], ['organic_matter_pct', 'Organic matter %'], ['sand_pct', 'Sand %'], ['silt_pct', 'Silt %'], ['clay_pct', 'Clay %']].map(([key, label]) => { const measurement = reportMeasurement(key); return <div key={key}><span>{label}</span><strong>{measurement ? `${formatMeasurement(measurement.minimum)}–${formatMeasurement(measurement.maximum)}` : '—'}</strong></div> })}</div><div className="recommendation-guidance"><div><span className="result-label">Brief status</span><strong>{recommendation.status.replaceAll('_', ' ')}</strong></div><ul>{recommendation.guidance.map((item) => <li key={item}>{item}</li>)}</ul>{recommendation.missing_context.length > 0 && <p className="form-note">Missing context: {recommendation.missing_context.join(', ')}.</p>}{recommendation.ai_explanation && <div className="ai-explanation"><span className="result-label">AI explanation</span><p>{recommendation.ai_explanation}</p><small>AI explains the aggregate summary only; it does not provide application rates.</small></div>}</div></div>}
       </section>
       <section className="map-section">
         <div className="section-heading"><div><p className="eyebrow">MAP / SAMPLE LOCATIONS</p><h2>Soil sample coverage</h2></div><div className="section-actions"><button className="secondary-button" type="button" onClick={() => void loadSamples().catch(() => undefined)} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh map'}</button><label className="metric-picker">Color by<select value={colorMetric} onChange={(event) => setColorMetric(event.target.value as MetricKey)}>{Object.entries(metricLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div></div>

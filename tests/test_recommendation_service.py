@@ -44,3 +44,23 @@ def test_ai_explanation_requires_configuration(monkeypatch: pytest.MonkeyPatch) 
     request = LocationRecommendationRequest(latitude=42, longitude=-93, radius_km=10)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         asyncio.run(recommendations.explain_soil_summary(request, summary(1), ["crop"]))
+
+
+def test_mock_ai_explanation_does_not_require_openai(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_EXPLANATION_MODE", "mock")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    request = LocationRecommendationRequest(
+        latitude=42,
+        longitude=-93,
+        radius_km=10,
+        crop="corn",
+        state_province="Iowa",
+        yield_goal=200,
+        yield_goal_unit="bu/acre",
+    )
+
+    explanation = asyncio.run(recommendations.explain_soil_summary(request, summary(2), ["crop"]))
+
+    assert explanation.startswith("Demo AI explanation:")
+    assert "2 nearby samples" in explanation
+    assert "corn, Iowa, 200 bu/acre" in explanation

@@ -201,6 +201,43 @@ def test_location_recommendation_skips_ai_when_no_samples(
     ai_explainer.assert_not_awaited()
 
 
+def test_location_recommendation_uses_mock_ai_mode_without_openai(
+    client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_EXPLANATION_MODE", "mock")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        routes,
+        "get_soil_range_report",
+        AsyncMock(return_value=make_soil_summary()),
+    )
+
+    response = client.post(
+        "/api/v1/recommendations/location",
+        json={
+            "latitude": 41.88,
+            "longitude": -93.10,
+            "radius_km": 2,
+            "crop": "corn",
+            "state_province": "Iowa",
+            "yield_goal": 200,
+            "yield_goal_unit": "bu/acre",
+            "soil_test_lab": "Example Lab",
+            "soil_test_method": "Mehlich-3",
+            "include_ai_explanation": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "calibration_not_configured"
+    assert body["missing_context"] == []
+    assert body["ai_assisted"] is True
+    assert body["ai_explanation"].startswith("Demo AI explanation:")
+    assert "corn, Iowa, 200 bu/acre" in body["ai_explanation"]
+
+
 def test_location_recommendation_validates_input(client) -> None:
     response = client.post(
         "/api/v1/recommendations/location",

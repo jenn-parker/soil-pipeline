@@ -11,6 +11,34 @@ class SoilSummaryExplanation(BaseModel):
     summary: str
 
 
+def _mock_soil_explanation(
+    request: LocationRecommendationRequest,
+    soil_summary: SoilRangeReport,
+    missing_context: list[str],
+) -> str:
+    """Return a deterministic demo response without contacting an AI provider."""
+    ph = soil_summary.measurements.get("soil_ph")
+    ph_text = f"pH ranges from {ph.minimum} to {ph.maximum}" if ph else "pH was not available"
+    missing_text = (
+        f" Missing context includes {', '.join(missing_context)}."
+        if missing_context
+        else " The requested context is present, but this demo does not calculate application rates."
+    )
+    context = []
+    if request.crop:
+        context.append(request.crop)
+    if request.state_province:
+        context.append(request.state_province)
+    if request.yield_goal is not None:
+        context.append(f"{request.yield_goal} {request.yield_goal_unit or 'yield units per acre'}")
+    context_text = f" for {', '.join(context)}" if context else ""
+    return (
+        f"Demo AI explanation: for the submitted context{context_text}, the {soil_summary.sample_count} nearby samples show {ph_text}. "
+        "These ranges combine multiple samples and should not be treated as one composite result."
+        f"{missing_text} Use a current laboratory report and qualified agronomic guidance before making management decisions."
+    )
+
+
 def missing_recommendation_context(
     request: LocationRecommendationRequest,
 ) -> list[str]:
@@ -56,6 +84,9 @@ async def explain_soil_summary(
     soil_summary: SoilRangeReport,
     missing_context: list[str],
 ) -> str:
+    if os.getenv("AI_EXPLANATION_MODE", "live").lower() == "mock":
+        return _mock_soil_explanation(request, soil_summary, missing_context)
+
     try:
         from openai import AsyncOpenAI, OpenAIError
     except ImportError as exc:
