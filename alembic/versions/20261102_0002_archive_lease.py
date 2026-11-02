@@ -25,6 +25,14 @@ def upgrade() -> None:
         "soil_upload_batches",
         sa.Column("archive_lease_until", sa.DateTime(timezone=True), nullable=True),
     )
+    op.add_column(
+        "soil_upload_batches",
+        sa.Column("archive_fenced_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.add_column(
+        "soil_upload_batches",
+        sa.Column("archive_fence_reason", sa.String(length=100), nullable=True),
+    )
     op.execute(
         """
         UPDATE soil_upload_batches
@@ -43,6 +51,8 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_soil_upload_batches_archive_status_lease", table_name="soil_upload_batches")
+    op.drop_column("soil_upload_batches", "archive_fence_reason")
+    op.drop_column("soil_upload_batches", "archive_fenced_at")
     op.drop_column("soil_upload_batches", "archive_lease_until")
     op.drop_column("soil_upload_batches", "archive_generation")
     op.drop_column("soil_upload_batches", "archive_status")

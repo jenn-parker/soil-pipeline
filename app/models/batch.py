@@ -17,6 +17,8 @@ class SoilSampleBatch(Base):
     archive_status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
     archive_generation: Mapped[str | None] = mapped_column(String(64), nullable=True)
     archive_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archive_fenced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    archive_fence_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="processing")
     total_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     accepted_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

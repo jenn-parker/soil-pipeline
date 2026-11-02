@@ -833,22 +833,23 @@ async def upload_soil_batch(
     )
     db.add(batch)
     await db.flush()
+    batch_id = batch.id
 
     try:
         await db.commit()
     except Exception as exc:
-        logger.exception("batch.intent_commit.failed", extra={"batch_id": batch.id, "upload_filename": filename})
+        logger.exception("batch.intent_commit.failed", extra={"batch_id": batch_id, "upload_filename": filename})
         try:
             await db.rollback()
         except Exception:
-            logger.exception("batch.rollback.failed", extra={"batch_id": batch.id})
+            logger.exception("batch.rollback.failed", extra={"batch_id": batch_id})
         raise HTTPException(status_code=503, detail="Batch could not be prepared") from exc
 
     archived_object: tuple[str, str] | None = None
     try:
         archived_object = await archive_batch_upload(contents=contents, object_key=object_key)
     except RuntimeError as exc:
-        logger.exception("batch.archive.failed", extra={"batch_id": batch.id, "upload_filename": filename})
+        logger.exception("batch.archive.failed", extra={"batch_id": batch_id, "upload_filename": filename})
         # A successful PUT can still be reported as failed (for example, if the
         # response is lost), so remove the key even when archive_batch_upload
         # raises before returning it.
@@ -864,7 +865,7 @@ async def upload_soil_batch(
             batch.completed_at = datetime.now(timezone.utc)
             await db.commit()
         except Exception:
-            logger.exception("batch.archive_failure_state_commit.failed", extra={"batch_id": batch.id})
+            logger.exception("batch.archive_failure_state_commit.failed", extra={"batch_id": batch_id})
         raise HTTPException(status_code=503, detail="Batch file storage is temporarily unavailable") from exc
 
     try:
@@ -875,12 +876,15 @@ async def upload_soil_batch(
             or batch.archive_lease_until is None
             or batch.archive_lease_until <= datetime.now(timezone.utc)
         ):
-            batch.archive_status = "abandoned"
-            batch.status = "failed"
-            batch.archive_lease_until = None
-            await db.commit()
-            await discard_batch_upload(bucket, object_key)
-            raise HTTPException(status_code=503, detail="Batch upload lease expired")
+            # Another worker may already have finalized or fenced this
+            # generation. A stale uploader must not overwrite that decision.
+            batch_id = batch.id
+            await db.rollback()
+            logger.warning(
+                "batch.archive.uploader_fenced",
+                extra={"batch_id": batch_id, "upload_filename": filename},
+            )
+            raise HTTPException(status_code=409, detail="Batch upload lease is no longer valid")
 
         soil_rows: list[SoilTestResult] = []
         linked_rows: list[tuple[SampleProvenance, SoilTestResult]] = []
@@ -918,15 +922,42 @@ async def upload_soil_batch(
                 .execution_options(synchronize_session=False)
             )
 
-        batch.status = "rejected" if row_errors else "completed"
-        batch.completed_at = datetime.now(timezone.utc)
+        final_status = "rejected" if row_errors else "completed"
+        final_time = datetime.now(timezone.utc)
+        batch.status = final_status
+        batch.completed_at = final_time
         batch.archive_status = "archived"
         batch.archive_lease_until = None
+        finalization = await db.execute(
+            update(SoilSampleBatch)
+            .where(
+                SoilSampleBatch.id == batch.id,
+                SoilSampleBatch.archive_status == "pending",
+                SoilSampleBatch.archive_generation == generation,
+                SoilSampleBatch.archive_lease_until > final_time,
+            )
+            .values(
+                status=final_status,
+                completed_at=final_time,
+                archive_status="archived",
+                archive_lease_until=None,
+                archive_fenced_at=None,
+                archive_fence_reason=None,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if finalization.rowcount != 1:
+            await db.rollback()
+            logger.warning(
+                "batch.archive.finalization_fenced",
+                extra={"batch_id": batch.id, "upload_filename": filename},
+            )
+            raise HTTPException(status_code=409, detail="Batch upload lease is no longer valid")
         await db.commit()
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("batch.database_commit.failed", extra={"batch_id": batch.id, "upload_filename": filename})
+        logger.exception("batch.database_commit.failed", extra={"batch_id": batch_id, "upload_filename": filename})
         # The commit outcome is ambiguous when the connection drops after
         # PostgreSQL commits but before the client receives confirmation. Do
         # not delete the archive: the durable pending lease protects it and
@@ -935,7 +966,7 @@ async def upload_soil_batch(
             logger.error(
                 "batch.archive.retained_after_ambiguous_commit",
                 extra={
-                    "batch_id": batch.id,
+                    "batch_id": batch_id,
                     "s3_bucket": archived_object[0],
                     "s3_key": archived_object[1],
                 },
@@ -943,7 +974,7 @@ async def upload_soil_batch(
         try:
             await db.rollback()
         except Exception:
-            logger.exception("batch.rollback.failed", extra={"batch_id": batch.id})
+            logger.exception("batch.rollback.failed", extra={"batch_id": batch_id})
         raise HTTPException(status_code=503, detail="Batch could not be saved") from exc
 
     await db.refresh(batch)

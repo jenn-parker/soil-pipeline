@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import HTTPException, UploadFile
 from botocore.exceptions import ClientError
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.api import routes
 from app.auth import Principal
@@ -16,6 +16,7 @@ from app.database import async_session_factory, engine
 from app.models.batch import SoilSampleBatch
 from app.models.soil import SoilTestResult
 from app.services.object_storage import discard_batch_upload, _get_s3_client
+from app.services import object_storage
 from app.jobs.reconcile_batch_archives import reconcile_batch_archives
 
 pytestmark = pytest.mark.integration
@@ -206,6 +207,116 @@ def test_real_reconciliation_deletes_old_orphan() -> None:
             )
             assert result.deleted >= 1
 
+    try:
+        asyncio.run(scenario())
+        with pytest.raises(ClientError):
+            client.head_object(Bucket=bucket, Key=object_key)
+    finally:
+        try:
+            asyncio.run(discard_batch_upload(bucket, object_key))
+        except RuntimeError:
+            pass
+
+
+def test_real_expired_lease_fences_stale_uploader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.getenv("RUN_INTEGRATION_TESTS") != "1":
+        pytest.skip("set RUN_INTEGRATION_TESTS=1 to run service integration tests")
+
+    sample_id = f"INTEGRATION-RACE-{uuid.uuid4().hex[:12]}"
+    filename = f"race-{uuid.uuid4().hex[:12]}.csv"
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            principal=Principal(subject="integration-test", scopes=frozenset())
+        )
+    )
+    put_finished = asyncio.Event()
+    release_uploader = asyncio.Event()
+    batch_id: int | None = None
+    source_bucket: str | None = None
+    source_key: str | None = None
+
+    async def gated_archive(contents: bytes, object_key: str) -> tuple[str, str]:
+        result = await object_storage.archive_batch_upload(contents, object_key)
+        put_finished.set()
+        await release_uploader.wait()
+        return result
+
+    monkeypatch.setattr(routes, "archive_batch_upload", gated_archive)
+
+    async def scenario() -> None:
+        nonlocal batch_id, source_bucket, source_key
+        upload_task: asyncio.Task[object] | None = None
+        try:
+            async with async_session_factory() as upload_db:
+                upload_task = asyncio.create_task(
+                    routes.upload_soil_batch(
+                        request,
+                        UploadFile(
+                            filename=filename,
+                            file=io.BytesIO(
+                                f"sample_id,latitude,longitude\n{sample_id},42.7,-92.4\n".encode("utf-8")
+                            ),
+                        ),
+                        upload_db,
+                    )
+                )
+                await put_finished.wait()
+
+                async with async_session_factory() as lease_db:
+                    pending_batch = await lease_db.scalar(
+                        select(SoilSampleBatch).where(SoilSampleBatch.filename == filename)
+                    )
+                    assert pending_batch is not None
+                    batch_id = pending_batch.id
+                    source_bucket = pending_batch.source_bucket
+                    source_key = pending_batch.source_key
+                    await lease_db.execute(
+                        update(SoilSampleBatch)
+                        .where(SoilSampleBatch.id == pending_batch.id)
+                        .values(archive_lease_until=datetime.now(timezone.utc) - timedelta(minutes=1))
+                    )
+                    await lease_db.commit()
+
+                async with async_session_factory() as reconcile_db:
+                    await reconcile_batch_archives(
+                        reconcile_db,
+                        grace_period=timedelta(days=1),
+                        now=datetime.now(timezone.utc) + timedelta(days=2),
+                    )
+
+                release_uploader.set()
+                with pytest.raises(HTTPException, match="lease is no longer valid"):
+                    await upload_task
+                assert await upload_db.scalar(
+                    select(SoilTestResult).where(SoilTestResult.sample_id == sample_id)
+                ) is None
+                fenced_batch = await upload_db.scalar(
+                    select(SoilSampleBatch).where(SoilSampleBatch.id == batch_id)
+                )
+                assert fenced_batch is not None
+                assert fenced_batch.archive_status == "abandoned"
+                assert fenced_batch.archive_fenced_at is not None
+                assert fenced_batch.archive_fence_reason == "lease_expired"
+        finally:
+            release_uploader.set()
+            if upload_task is not None and not upload_task.done():
+                upload_task.cancel()
+                await asyncio.gather(upload_task, return_exceptions=True)
+            if batch_id is not None:
+                async with async_session_factory() as cleanup_db:
+                    await cleanup_db.execute(
+                        delete(SoilTestResult).where(SoilTestResult.sample_id == sample_id)
+                    )
+                    await cleanup_db.execute(
+                        delete(SoilSampleBatch).where(SoilSampleBatch.id == batch_id)
+                    )
+                    await cleanup_db.commit()
+            if source_bucket is not None and source_key is not None:
+                try:
+                    await discard_batch_upload(source_bucket, source_key)
+                except RuntimeError:
+                    pass
+
     asyncio.run(scenario())
-    with pytest.raises(ClientError):
-        client.head_object(Bucket=bucket, Key=object_key)

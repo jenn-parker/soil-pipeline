@@ -25,6 +25,7 @@ def configured_db() -> MagicMock:
     db.flush = AsyncMock()
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
+    db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
     db.refresh = AsyncMock()
     return db
 
@@ -141,3 +142,33 @@ def test_upload_cleans_up_when_s3_archive_fails(
     assert object_key.startswith("soil-batches/")
     assert object_key.endswith("/valid.csv")
     assert db.commit.await_count == 2
+
+
+def test_stale_uploader_does_not_overwrite_terminal_archive_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = configured_db()
+    db.scalars = AsyncMock(side_effect=[SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])])
+    archive = AsyncMock(return_value=("bucket", "soil-batches/key.csv"))
+    discard = AsyncMock()
+
+    async def refresh_as_finalized(batch: object, **kwargs: object) -> None:
+        batch.archive_status = "archived"
+
+    db.refresh.side_effect = refresh_as_finalized
+    monkeypatch.setattr(routes, "archive_batch_upload", archive)
+    monkeypatch.setattr(routes, "discard_batch_upload", discard)
+
+    with pytest.raises(HTTPException, match="lease is no longer valid") as error:
+        asyncio.run(
+            routes.upload_soil_batch(
+                request_for_owner(),
+                upload("stale.csv", "sample_id,latitude,longitude\nFIELD-9,42.7,-92.4\n"),
+                db,
+            )
+        )
+
+    assert error.value.status_code == 409
+    assert db.commit.await_count == 1
+    db.rollback.assert_awaited_once()
+    discard.assert_not_awaited()

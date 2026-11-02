@@ -189,7 +189,7 @@ To reconcile old S3 batch archives that are not referenced by PostgreSQL, run th
 python -m app.jobs.reconcile_batch_archives --grace-hours 24
 ```
 
-The upload flow persists a durable archive intent and a two-hour lease before writing to S3. The job scans only `soil-batches/`, retains referenced and active leased objects, fences expired pending leases, and deletes only stale objects confirmed to be unreferenced. Run it from a scheduled worker or cron job with the same database and S3 configuration as the API.
+The upload flow persists a durable archive intent and a two-hour lease before writing to S3. The two-hour lease is an explicit operational assumption: CSV uploads are expected to finish well within that limit. Finalization uses the archive generation and lease as a conditional database transition, so stale workers cannot overwrite a newer state. The job scans only `soil-batches/`, retains referenced and active leased objects, fences expired pending leases, and deletes only stale objects confirmed to be unreferenced. Run it from a scheduled worker or cron job with the same database and S3 configuration as the API.
 
 For a local cron schedule, use the project virtual environment and load the ignored `.env` file so the job has the database and LocalStack settings:
 

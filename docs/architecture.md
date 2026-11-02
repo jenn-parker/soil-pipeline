@@ -63,6 +63,8 @@ Alembic is the source of truth for schema migrations. The current ownership and 
 
 Accepted CSV batches are archived in an S3-compatible bucket. Local development uses LocalStack; a deployed environment can use Amazon S3. The bucket is private, encrypted at rest, versioned, and configured to expire noncurrent versions after 30 days.
 
+Uploads persist a durable archive intent in PostgreSQL before writing to S3. Each intent has a unique generation and a two-hour lease. Finalization is a conditional database transition requiring the same generation, a pending state, and an unexpired lease, which fences stale upload workers from overwriting newer decisions. Reconciliation locks expired pending intents, records `archive_fenced_at` and `archive_fence_reason`, and deletes only objects that are then confirmed stale and unreferenced. A late S3 PUT cannot participate in the database transaction; a fenced worker cannot finalize it, and a later reconciliation pass handles any object left behind.
+
 ### Authentication and authorization
 
 The application supports a lightweight API-key provider for local testing and Amazon Cognito for the OAuth-enabled demo flow. Cognito uses a public web client with the authorization-code flow and PKCE. The API validates the authenticated session and applies route scopes and sample-level authorization.
@@ -70,7 +72,7 @@ The application supports a lightweight API-key provider for local testing and Am
 IAM is split by purpose:
 
 - The Terraform permission set provisions the project’s Cognito, S3, IAM, and optional EKS Pod Identity resources.
-- The API workload role is restricted to writing accepted batch objects.
+- The API workload role is restricted to listing, writing, and deleting batch objects under the `soil-batches/` prefix.
 - A permissions boundary limits the maximum permissions of the API workload role.
 
 No EKS cluster is provisioned by this repository. The optional Pod Identity association is disabled by default and only applies to an existing cluster.

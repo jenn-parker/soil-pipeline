@@ -169,6 +169,8 @@ async def _prepare_for_delete(
                 return False
             locked_batch.archive_status = "abandoned"
             locked_batch.archive_lease_until = None
+            locked_batch.archive_fenced_at = current_time
+            locked_batch.archive_fence_reason = "lease_expired"
             await db.commit()
         except Exception:
             logger.exception(
