@@ -159,6 +159,7 @@ async def _prepare_for_delete(
                 select(SoilSampleBatch)
                 .where(SoilSampleBatch.id == batch.id)
                 .with_for_update()
+                .execution_options(populate_existing=True)
             )
             if locked_batch is None or locked_batch.archive_status != "pending":
                 return locked_batch is None or locked_batch.archive_status != "archived"

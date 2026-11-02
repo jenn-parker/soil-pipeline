@@ -189,13 +189,17 @@ def test_real_s3_failure_persists_failed_archive_state(
             monkeypatch.setenv("AWS_ENDPOINT_URL_S3", original_endpoint)
 
 
-def test_real_reconciliation_deletes_old_orphan() -> None:
+def test_real_reconciliation_deletes_old_orphan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     if os.getenv("RUN_INTEGRATION_TESTS") != "1":
         pytest.skip("set RUN_INTEGRATION_TESTS=1 to run service integration tests")
 
-    bucket = os.getenv("S3_BATCH_BUCKET", "soil-pipeline-batches")
+    bucket = f"soil-pipeline-reconcile-{uuid.uuid4().hex[:12]}"
+    monkeypatch.setenv("S3_BATCH_BUCKET", bucket)
     object_key = f"soil-batches/integration-orphan-{uuid.uuid4().hex}.csv"
     client = _get_s3_client()
+    client.create_bucket(Bucket=bucket)
     client.put_object(Bucket=bucket, Key=object_key, Body=b"orphan")
 
     async def scenario() -> None:
@@ -216,6 +220,7 @@ def test_real_reconciliation_deletes_old_orphan() -> None:
             asyncio.run(discard_batch_upload(bucket, object_key))
         except RuntimeError:
             pass
+        client.delete_bucket(Bucket=bucket)
 
 
 def test_real_expired_lease_fences_stale_uploader(
@@ -224,6 +229,10 @@ def test_real_expired_lease_fences_stale_uploader(
     if os.getenv("RUN_INTEGRATION_TESTS") != "1":
         pytest.skip("set RUN_INTEGRATION_TESTS=1 to run service integration tests")
 
+    bucket = f"soil-pipeline-race-{uuid.uuid4().hex[:12]}"
+    monkeypatch.setenv("S3_BATCH_BUCKET", bucket)
+    client = _get_s3_client()
+    client.create_bucket(Bucket=bucket)
     sample_id = f"INTEGRATION-RACE-{uuid.uuid4().hex[:12]}"
     filename = f"race-{uuid.uuid4().hex[:12]}.csv"
     request = SimpleNamespace(
@@ -318,5 +327,6 @@ def test_real_expired_lease_fences_stale_uploader(
                     await discard_batch_upload(source_bucket, source_key)
                 except RuntimeError:
                     pass
+            client.delete_bucket(Bucket=bucket)
 
     asyncio.run(scenario())

@@ -172,3 +172,29 @@ def test_stale_uploader_does_not_overwrite_terminal_archive_state(
     assert db.commit.await_count == 1
     db.rollback.assert_awaited_once()
     discard.assert_not_awaited()
+
+
+def test_conditional_finalization_fences_when_update_loses_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = configured_db()
+    db.scalars = AsyncMock(side_effect=[SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])])
+    db.execute.return_value = SimpleNamespace(rowcount=0)
+    archive = AsyncMock(return_value=("bucket", "soil-batches/key.csv"))
+    discard = AsyncMock()
+    monkeypatch.setattr(routes, "archive_batch_upload", archive)
+    monkeypatch.setattr(routes, "discard_batch_upload", discard)
+
+    with pytest.raises(HTTPException, match="lease is no longer valid") as error:
+        asyncio.run(
+            routes.upload_soil_batch(
+                request_for_owner(),
+                upload("conditional-race.csv", "sample_id,latitude,longitude\nFIELD-10,42.7,-92.4\n"),
+                db,
+            )
+        )
+
+    assert error.value.status_code == 409
+    assert db.commit.await_count == 1
+    db.rollback.assert_awaited_once()
+    discard.assert_not_awaited()
