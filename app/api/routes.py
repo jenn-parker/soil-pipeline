@@ -974,7 +974,6 @@ async def upload_soil_batch(
             logger.exception("batch.rollback.failed", extra={"batch_id": batch_id})
         raise HTTPException(status_code=503, detail="Batch could not be saved") from exc
 
-    await db.refresh(batch)
     logger.info(
         "batch.completed",
         extra={
