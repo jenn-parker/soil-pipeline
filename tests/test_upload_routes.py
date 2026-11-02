@@ -26,7 +26,13 @@ def configured_db() -> MagicMock:
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
     db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
-    db.refresh = AsyncMock()
+    async def refresh(instance: object, **kwargs: object) -> None:
+        if not kwargs.get("with_for_update"):
+            instance.status = "completed" if instance.accepted_rows else "rejected"
+            instance.archive_status = "archived"
+            instance.archive_lease_until = None
+
+    db.refresh = AsyncMock(side_effect=refresh)
     return db
 
 
@@ -105,10 +111,11 @@ def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
     # object.
     batch = db.add.call_args.args[0]
     # PostgreSQL may have committed either the pending intent or the final
-    # archived state; the important invariant is that the object is retained.
-    assert batch.archive_status == "archived"
+    # archived state; the in-memory object remains at the safe pending state
+    # because the conditional SQL update did not mutate it prematurely.
+    assert batch.archive_status == "pending"
     assert batch.archive_generation
-    assert batch.archive_lease_until is None
+    assert batch.archive_lease_until is not None
     assert batch.source_key == "soil-batches/" + batch.archive_generation + "/valid.csv"
     db.rollback.assert_awaited_once()
     discard.assert_not_awaited()

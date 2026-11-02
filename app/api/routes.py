@@ -924,10 +924,6 @@ async def upload_soil_batch(
 
         final_status = "rejected" if row_errors else "completed"
         final_time = datetime.now(timezone.utc)
-        batch.status = final_status
-        batch.completed_at = final_time
-        batch.archive_status = "archived"
-        batch.archive_lease_until = None
         finalization = await db.execute(
             update(SoilSampleBatch)
             .where(
@@ -954,6 +950,7 @@ async def upload_soil_batch(
             )
             raise HTTPException(status_code=409, detail="Batch upload lease is no longer valid")
         await db.commit()
+        await db.refresh(batch)
     except HTTPException:
         raise
     except Exception as exc:
