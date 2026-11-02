@@ -3,6 +3,7 @@ import logging
 import os
 from time import perf_counter
 from threading import Lock
+from typing import Any
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
@@ -57,6 +58,14 @@ def _delete_from_s3(bucket: str, object_key: str) -> None:
     _get_s3_client().delete_object(Bucket=bucket, Key=object_key)
 
 
+def _list_from_s3(bucket: str, prefix: str) -> list[dict[str, Any]]:
+    objects: list[dict[str, Any]] = []
+    paginator = _get_s3_client().get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        objects.extend(page.get("Contents", []))
+    return objects
+
+
 async def archive_batch_upload(
     contents: bytes,
     object_key: str,
@@ -97,3 +106,15 @@ async def discard_batch_upload(bucket: str, object_key: str) -> None:
             extra={"s3_bucket": bucket, "object_key": object_key},
         )
         raise RuntimeError("Unable to clean up the uploaded batch file") from exc
+
+
+async def list_batch_objects(bucket: str, prefix: str = "soil-batches/") -> list[dict[str, Any]]:
+    """List archived batch objects and their S3 metadata."""
+    try:
+        return await asyncio.to_thread(_list_from_s3, bucket, prefix)
+    except (BotoCoreError, ClientError, OSError) as exc:
+        logger.exception(
+            "S3 batch archive listing failed",
+            extra={"s3_bucket": bucket, "s3_prefix": prefix},
+        )
+        raise RuntimeError("Unable to list batch archive files") from exc

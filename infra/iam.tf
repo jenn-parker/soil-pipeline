@@ -19,9 +19,21 @@ data "aws_iam_policy_document" "api_pod_identity_trust" {
 
 data "aws_iam_policy_document" "api_s3_access" {
   statement {
+    sid       = "ListBatchArchiveObjects"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.batch_archive.arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["soil-batches/*"]
+    }
+  }
+
+  statement {
     sid     = "ArchiveBatchObjects"
     effect  = "Allow"
-    actions = ["s3:PutObject"]
+    actions = ["s3:PutObject", "s3:DeleteObject"]
     resources = [
       "${aws_s3_bucket.batch_archive.arn}/soil-batches/*",
     ]
@@ -30,9 +42,21 @@ data "aws_iam_policy_document" "api_s3_access" {
 
 data "aws_iam_policy_document" "api_runtime_boundary" {
   statement {
+    sid       = "ListBatchArchiveObjects"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.batch_archive.arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["soil-batches/*"]
+    }
+  }
+
+  statement {
     sid     = "AllowBatchArchiveOnly"
     effect  = "Allow"
-    actions = ["s3:PutObject"]
+    actions = ["s3:PutObject", "s3:DeleteObject"]
     resources = [
       "${aws_s3_bucket.batch_archive.arn}/soil-batches/*",
     ]

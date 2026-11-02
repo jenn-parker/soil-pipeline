@@ -164,6 +164,32 @@ normal application behavior rather than setup and defensive plumbing.
 
 The suite covers request validation, recommendation status and opt-in behavior, and S3 client configuration/error handling. Database queries and S3 calls are mocked, so these tests do not require a running PostgreSQL/PostGIS or LocalStack service.
 
+The service integration tests are opt-in. The following workflow uses the LocalStack CLI-managed emulator and the project’s PostgreSQL container; it does not provision or contact AWS:
+
+```bash
+docker compose up -d db
+lstk start
+aws --endpoint-url http://localhost.localstack.cloud:4566 s3 mb s3://soil-pipeline-batches
+
+export DATABASE_URL='postgresql+asyncpg://earth_user:earth_password@localhost:5432/soil_db'
+export AWS_ENDPOINT_URL_S3='http://localhost.localstack.cloud:4566'
+export AWS_ACCESS_KEY_ID='test'
+export AWS_SECRET_ACCESS_KEY='test'
+export S3_BATCH_BUCKET='soil-pipeline-batches'
+alembic upgrade head
+RUN_INTEGRATION_TESTS=1 python -m pytest tests/integration -q
+```
+
+If you use Compose to run LocalStack instead, start it with `docker compose up -d localstack` and use `http://localhost:4566` for `AWS_ENDPOINT_URL_S3`. Do not run both LocalStack instances on port 4566. The tests exercise the real CSV upload path, PostgreSQL persistence, and LocalStack object storage; they clean up their generated sample, batch, and archive after completion.
+
+To reconcile old S3 batch archives that are not referenced by PostgreSQL, run the maintenance job with a grace period. The default is 24 hours:
+
+```bash
+python -m app.jobs.reconcile_batch_archives --grace-hours 24
+```
+
+The job scans only `soil-batches/`, retains referenced and recent objects, and deletes only stale objects confirmed to be unreferenced. Run it from a scheduled worker or cron job with the same database and S3 configuration as the API.
+
 ## Database migrations
 
 Alembic is the schema migration tool for new changes. The database URL is read from `DATABASE_URL`, which uses the same async PostgreSQL URL as the application:

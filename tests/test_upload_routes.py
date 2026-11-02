@@ -85,8 +85,10 @@ def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
     db = configured_db()
     db.scalars = AsyncMock(side_effect=[SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])])
     archive = AsyncMock(return_value=("bucket", "soil-batches/key.csv"))
+    discard = AsyncMock()
     db.commit.side_effect = RuntimeError("database unavailable")
     monkeypatch.setattr(routes, "archive_batch_upload", archive)
+    monkeypatch.setattr(routes, "discard_batch_upload", discard)
 
     with pytest.raises(HTTPException, match="could not be saved"):
         asyncio.run(
@@ -101,6 +103,7 @@ def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
     # archive must be retained so committed rows cannot reference a deleted
     # object.
     db.rollback.assert_awaited_once()
+    discard.assert_not_awaited()
 
 
 def test_upload_cleans_up_when_s3_archive_fails(

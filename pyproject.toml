@@ -14,3 +14,6 @@ exclude_also = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: requires PostgreSQL/PostGIS and LocalStack services",
+]
