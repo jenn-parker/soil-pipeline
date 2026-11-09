@@ -46,6 +46,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "batch_archive" {
       prefix = ""
     }
 
+    transition {
+      days          = 7
+      storage_class = "GLACIER"
+    }
+
     noncurrent_version_expiration {
       noncurrent_days = 30
     }

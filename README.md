@@ -52,7 +52,7 @@ They use sanitized demo data and are kept separate from the implementation
 documentation so the README remains easy to scan. See the
 [screenshot gallery](docs/screenshots/README.md) for captions and context.
 
-The repository contains application code, Alembic migrations, legacy raw SQL migrations, tests, a Dockerfile, a local Compose environment, a CI workflow, Terraform configuration for the AWS security and storage foundation, and a starter Kubernetes manifest. The CI workflow validates backend tests, frontend lint/build, Terraform configuration, and the API Docker image on pushes to `main` and pull requests.
+The repository contains application code, Alembic migrations, tests, a Dockerfile, a local Compose environment, a CI workflow, Terraform configuration for the AWS security and storage foundation, and a starter Kubernetes manifest. The CI workflow validates backend tests, frontend lint/build, Terraform configuration, and the API Docker image on pushes to `main` and pull requests.
 
 The workflow performs validation only. It does not deploy infrastructure or application images, and it does not require AWS credentials in GitHub Actions. Deployment can be added later using GitHub OIDC and a narrowly scoped AWS role.
 
@@ -99,9 +99,9 @@ export LOCALSTACK_AUTH_TOKEN='YOUR_LOCALSTACK_AUTH_TOKEN'
 docker compose up --build
 ```
 
-The API listens on <http://localhost:8000>. Compose starts PostgreSQL 16/PostGIS and LocalStack. The PostGIS service is pinned to `linux/amd64` because the selected official image does not publish an ARM64 build; on Apple Silicon it runs under emulation and may be slower. LocalStack creates the `soil-pipeline-batches` bucket (configurable with `S3_BATCH_BUCKET`) and persists its data in a named volume. LocalStack is exposed at <http://localhost:4566>. The local AWS credentials and database credentials are examples; do not use them in a deployed environment.
+The API listens on <http://localhost:8000>. Compose starts PostgreSQL 16 with PostGIS 3.6 and LocalStack. The PostGIS service is pinned to `linux/amd64` because the selected official image does not publish an ARM64 build; on Apple Silicon it runs under emulation and may be slower. LocalStack creates the `soil-pipeline-batches` bucket (configurable with `S3_BATCH_BUCKET`) and persists its data in a named volume. LocalStack is exposed at <http://localhost:4566>. The local AWS credentials and database credentials are examples; do not use them in a deployed environment.
 
-Compose runs `alembic upgrade head` before starting the development API. Alembic is the source of truth for schema changes; the legacy numbered SQL files are retained for reference and are not run by Compose. For production, apply the Alembic migrations as a deployment step or migration job before starting API replicas.
+Compose runs `alembic upgrade head` before starting the development API. Alembic is the source of truth for schema changes. For production, apply the Alembic migrations as a deployment step or migration job before starting API instances.
 
 Inspect local S3 objects with the AWS CLI (or `awslocal` if installed):
 
@@ -134,13 +134,7 @@ export S3_BATCH_BUCKET='soil-pipeline-batches'
 uvicorn app.main:app --reload
 ```
 
-The database must have PostGIS installed and the extension enabled before starting the app. The S3 endpoint and bucket must also be available for CSV uploads; start Compose's LocalStack service with `docker compose up localstack` or point these settings to an AWS account. Alembic's initial revision creates PostGIS, the current application tables, and their indexes. Existing databases created by the former `create_all()` workflow should be checked against the current models and then stamped at the current revision rather than replaying the initial `CREATE TABLE` migration:
-
-```bash
-docker compose run --rm web alembic stamp head
-```
-
-Only use that stamping command when the existing schema already matches the current models. For a disposable local database, reset the volumes and let Compose recreate everything:
+The database must have PostGIS installed and the extension enabled before starting the app. The S3 endpoint and bucket must also be available for CSV uploads; start Compose's LocalStack service with `docker compose up localstack` or point these settings to an AWS account. Alembic's initial revision creates PostGIS, the current application tables, and their indexes. For a disposable local database, reset the volumes and let Compose recreate everything:
 
 ```bash
 docker compose down --volumes
@@ -198,6 +192,8 @@ python -m app.jobs.reconcile_batch_archives --grace-hours 24
 
 The upload flow persists a durable archive intent and a two-hour lease before writing to S3. The two-hour lease is an explicit operational assumption: CSV uploads are expected to finish well within that limit. Finalization uses the archive generation and lease as a conditional database transition, so stale workers cannot overwrite a newer state. The job scans only `soil-batches/`, retains referenced and active leased objects, fences expired pending leases, and deletes only stale objects confirmed to be unreferenced. Run it from a scheduled worker or cron job with the same database and S3 configuration as the API.
 
+In AWS, the Terraform lifecycle configuration transitions current batch archives to S3 Glacier Flexible Retrieval after 7 days. Archived objects may need to be restored before they can be downloaded, and the reconciliation job can still delete stale unreferenced objects.
+
 For a local cron schedule, use the project virtual environment and load the ignored `.env` file so the job has the database and LocalStack settings:
 
 ```cron
@@ -229,7 +225,7 @@ catalog noise but does not replace migration review. GeoAlchemy2's Alembic
 helpers also render spatial types and indexes and register spatial operations
 for autogenerated revisions.
 
-The initial Alembic revision represents the current application schema. The older files in `migrations/` document the pre-Alembic migration history and should not be applied on top of a database already managed by Alembic.
+The initial Alembic revision represents the current application schema.
 
 ## API routes
 

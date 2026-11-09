@@ -61,7 +61,7 @@ Alembic is the source of truth for schema migrations. The current ownership and 
 
 ### Object storage
 
-Accepted CSV batches are archived in an S3-compatible bucket. Local development uses LocalStack; a deployed environment can use Amazon S3. The bucket is private, encrypted at rest, versioned, and configured to expire noncurrent versions after 30 days.
+Accepted CSV batches are archived in an S3-compatible bucket. Local development uses LocalStack; a deployed environment can use Amazon S3. The bucket is private, encrypted at rest, versioned, transitions current objects to S3 Glacier Flexible Retrieval after 7 days, and expires noncurrent versions after 30 days. Glacier objects may need to be restored before retrieval.
 
 Uploads persist a durable archive intent in PostgreSQL before writing to S3. Each intent has a unique generation and a two-hour lease. Finalization is a conditional database transition requiring the same generation, a pending state, and an unexpired lease, which fences stale upload workers from overwriting newer decisions. Reconciliation locks expired pending intents, records `archive_fenced_at` and `archive_fence_reason`, and deletes only objects that are then confirmed stale and unreferenced. A late S3 PUT cannot participate in the database transaction; a fenced worker cannot finalize it, and a later reconciliation pass handles any object left behind.
 
