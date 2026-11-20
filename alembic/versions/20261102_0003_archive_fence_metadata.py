@@ -6,7 +6,6 @@ Revises: 20261102_0002
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision: str = "20261102_0003"

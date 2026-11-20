@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException, UploadFile
 
-from app.api import routes
+from app.api import batches, routes
 from app.auth import Principal
 
 
@@ -42,8 +42,8 @@ def test_upload_rejects_missing_header_and_invalid_rows() -> None:
         asyncio.run(routes.upload_soil_batch(request_for_owner(), upload("missing.csv", "field_name\nNorth\n"), db))
 
     monkeypatch_archive = AsyncMock(return_value=("bucket", "key"))
-    original_archive = routes.archive_batch_upload
-    routes.archive_batch_upload = monkeypatch_archive
+    original_archive = batches.archive_batch_upload
+    batches.archive_batch_upload = monkeypatch_archive
     try:
         batch = asyncio.run(
             routes.upload_soil_batch(
@@ -53,7 +53,7 @@ def test_upload_rejects_missing_header_and_invalid_rows() -> None:
             )
         )
     finally:
-        routes.archive_batch_upload = original_archive
+        batches.archive_batch_upload = original_archive
 
     assert batch.status == "rejected"
     assert batch.rejected_rows == 1
@@ -64,8 +64,8 @@ def test_upload_accepts_valid_rows_and_assigns_owner() -> None:
     db = configured_db()
     db.scalars = AsyncMock(side_effect=[SimpleNamespace(all=lambda: []), SimpleNamespace(all=lambda: [])])
     archive = AsyncMock(return_value=("bucket", "soil-batches/key.csv"))
-    original_archive = routes.archive_batch_upload
-    routes.archive_batch_upload = archive
+    original_archive = batches.archive_batch_upload
+    batches.archive_batch_upload = archive
     try:
         batch = asyncio.run(
             routes.upload_soil_batch(
@@ -75,7 +75,7 @@ def test_upload_accepts_valid_rows_and_assigns_owner() -> None:
             )
         )
     finally:
-        routes.archive_batch_upload = original_archive
+        batches.archive_batch_upload = original_archive
 
     assert batch.status == "completed"
     assert batch.accepted_rows == 1
@@ -94,8 +94,8 @@ def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
     archive = AsyncMock(return_value=("bucket", "soil-batches/key.csv"))
     discard = AsyncMock()
     db.commit.side_effect = [None, RuntimeError("database unavailable")]
-    monkeypatch.setattr(routes, "archive_batch_upload", archive)
-    monkeypatch.setattr(routes, "discard_batch_upload", discard)
+    monkeypatch.setattr(batches, "archive_batch_upload", archive)
+    monkeypatch.setattr(batches, "discard_batch_upload", discard)
 
     with pytest.raises(HTTPException, match="could not be saved"):
         asyncio.run(
@@ -129,8 +129,8 @@ def test_upload_cleans_up_when_s3_archive_fails(
     archive = AsyncMock(side_effect=RuntimeError("S3 unavailable"))
     discard = AsyncMock()
     monkeypatch.setenv("S3_BATCH_BUCKET", "test-batches")
-    monkeypatch.setattr(routes, "archive_batch_upload", archive)
-    monkeypatch.setattr(routes, "discard_batch_upload", discard)
+    monkeypatch.setattr(batches, "archive_batch_upload", archive)
+    monkeypatch.setattr(batches, "discard_batch_upload", discard)
 
     with pytest.raises(HTTPException, match="storage is temporarily unavailable") as error:
         asyncio.run(
@@ -163,8 +163,8 @@ def test_stale_uploader_does_not_overwrite_terminal_archive_state(
         batch.archive_status = "archived"
 
     db.refresh.side_effect = refresh_as_finalized
-    monkeypatch.setattr(routes, "archive_batch_upload", archive)
-    monkeypatch.setattr(routes, "discard_batch_upload", discard)
+    monkeypatch.setattr(batches, "archive_batch_upload", archive)
+    monkeypatch.setattr(batches, "discard_batch_upload", discard)
 
     with pytest.raises(HTTPException, match="lease is no longer valid") as error:
         asyncio.run(
@@ -189,8 +189,8 @@ def test_conditional_finalization_fences_when_update_loses_race(
     db.execute.return_value = SimpleNamespace(rowcount=0)
     archive = AsyncMock(return_value=("bucket", "soil-batches/key.csv"))
     discard = AsyncMock()
-    monkeypatch.setattr(routes, "archive_batch_upload", archive)
-    monkeypatch.setattr(routes, "discard_batch_upload", discard)
+    monkeypatch.setattr(batches, "archive_batch_upload", archive)
+    monkeypatch.setattr(batches, "discard_batch_upload", discard)
 
     with pytest.raises(HTTPException, match="lease is no longer valid") as error:
         asyncio.run(

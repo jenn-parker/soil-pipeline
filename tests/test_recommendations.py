@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.api import routes
+from app.api import reports, routes
 from app.schemas.report import MeasurementRange, SoilRangeReport
 from app.services.recommendations import (
     missing_recommendation_context,
@@ -125,7 +125,7 @@ def test_location_recommendation_endpoint_returns_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        routes,
+        reports,
         "get_soil_range_report",
         AsyncMock(return_value=make_soil_summary()),
     )
@@ -153,12 +153,12 @@ def test_location_recommendation_does_not_call_ai_when_not_requested(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        routes,
+        reports,
         "get_soil_range_report",
         AsyncMock(return_value=make_soil_summary()),
     )
     ai_explainer = AsyncMock()
-    monkeypatch.setattr(routes, "explain_soil_summary", ai_explainer)
+    monkeypatch.setattr(reports, "explain_soil_summary", ai_explainer)
 
     response = client.post(
         "/api/v1/recommendations/location",
@@ -179,12 +179,12 @@ def test_location_recommendation_skips_ai_when_no_samples(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        routes,
+        reports,
         "get_soil_range_report",
         AsyncMock(return_value=make_soil_summary(sample_count=0)),
     )
     ai_explainer = AsyncMock()
-    monkeypatch.setattr(routes, "explain_soil_summary", ai_explainer)
+    monkeypatch.setattr(reports, "explain_soil_summary", ai_explainer)
 
     response = client.post(
         "/api/v1/recommendations/location",
@@ -208,7 +208,7 @@ def test_location_recommendation_uses_mock_ai_mode_without_openai(
     monkeypatch.setenv("AI_EXPLANATION_MODE", "mock")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(
-        routes,
+        reports,
         "get_soil_range_report",
         AsyncMock(return_value=make_soil_summary()),
     )

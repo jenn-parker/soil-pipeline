@@ -23,9 +23,6 @@ from app.logging_config import (
     request_id_context,
 )
 from app.database import engine
-from app.models.batch import SoilSampleBatch  # noqa: F401
-from app.models.sample import Party, SampleProvenance  # noqa: F401
-from app.models.soil import SoilTestResult  # noqa: F401
 
 logger = logging.getLogger(__name__)
 configure_logging()
