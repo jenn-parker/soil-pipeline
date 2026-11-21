@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/jenn-parker/soil-pipeline/compare/v1.2.0...v1.2.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* postgis spatial index migration ([4b2b0a4](https://github.com/jenn-parker/soil-pipeline/commit/4b2b0a434c621d4ab22959dd947894c721729f4f))
+
 ## [1.2.0](https://github.com/jenn-parker/soil-pipeline/compare/v1.1.0...v1.2.0) (2026-11-21)
 
 
