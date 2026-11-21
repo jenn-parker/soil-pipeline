@@ -71,6 +71,19 @@ the source description and repeatable local loader in
 [`data/seed/README.md`](data/seed/README.md) and
 [`scripts/seed_ssurgo_demo.sql`](scripts/seed_ssurgo_demo.sql).
 
+For a complete from-scratch local demo, start Compose and run the idempotent
+bootstrap command. It loads the SSURGO reference records and uploads a small
+deterministic batch through the authenticated API using the local demo key. The
+uploaded batch and its samples belong to the local demo principal.
+
+```bash
+python scripts/bootstrap_demo.py
+```
+
+The bootstrap command is local-only and does not create a Cognito account. Set
+`DEMO_API_KEY` if `AUTH_API_KEYS` uses a different local key. It is safe to
+rerun after the reference records and demo-owned samples already exist.
+
 Source credit:
 
 - USDA NRCS, [Soil Survey Geographic Database (SSURGO)](https://www.nrcs.usda.gov/resources/data-and-reports/soil-survey-geographic-database-ssurgo)
@@ -100,6 +113,18 @@ docker compose up --build
 ```
 
 The API listens on <http://localhost:8000>. Compose starts PostgreSQL 16 with PostGIS 3.6 and LocalStack. The PostGIS service is pinned to `linux/amd64` because the selected official image does not publish an ARM64 build; on Apple Silicon it runs under emulation and may be slower. LocalStack creates the `soil-pipeline-batches` bucket (configurable with `S3_BATCH_BUCKET`) and persists its data in a named volume. LocalStack is exposed at <http://localhost:4566>. The local AWS credentials and database credentials are examples; do not use them in a deployed environment.
+
+For the default offline API-key demo, configure the frontend to send the same
+development key:
+
+```bash
+cp frontend/.env.example frontend/.env.local
+```
+
+`VITE_API_KEY` is bundled into the browser by Vite and is therefore not a
+secret. Use it only with the local `api_key` provider; leave it unset for the
+Cognito flow, which authenticates through HttpOnly cookies. Never put a real
+production credential in a `VITE_*` variable.
 
 Compose runs `alembic upgrade head` before starting the development API. Alembic is the source of truth for schema changes. For production, apply the Alembic migrations as a deployment step or migration job before starting API instances.
 
@@ -165,24 +190,22 @@ normal application behavior rather than setup and defensive plumbing.
 
 The suite covers request validation, recommendation status and opt-in behavior, and S3 client configuration/error handling. Database queries and S3 calls are mocked, so these tests do not require a running PostgreSQL/PostGIS or LocalStack service.
 
-The service integration tests are opt-in. The following workflow uses the LocalStack CLI-managed emulator and the project’s PostgreSQL container; it does not provision or contact AWS:
+The service integration tests are opt-in. They run from the host against the
+published PostgreSQL and LocalStack ports; they do not provision or contact
+AWS. The recommended workflow is:
 
 ```bash
-docker compose up -d db
-lstk start
-aws --endpoint-url http://localhost.localstack.cloud:4566 \
-  s3 mb s3://soil-pipeline-batches 2>/dev/null || true
-
-export DATABASE_URL='postgresql+asyncpg://earth_user:earth_password@localhost:5432/soil_db'
-export AWS_ENDPOINT_URL_S3='http://localhost.localstack.cloud:4566'
-export AWS_ACCESS_KEY_ID='test'
-export AWS_SECRET_ACCESS_KEY='test'
-export S3_BATCH_BUCKET='soil-pipeline-batches'
-alembic upgrade head
-RUN_INTEGRATION_TESTS=1 python -m pytest tests/integration -q
+docker compose up -d db localstack
+./scripts/run_integration_tests.sh
 ```
 
-If you use Compose to run LocalStack instead, start it with `docker compose up -d localstack` and use `http://localhost:4566` for `AWS_ENDPOINT_URL_S3`. Do not run both LocalStack instances on port 4566. The tests exercise the real CSV upload path, PostgreSQL persistence, and LocalStack object storage; they clean up their generated sample, batch, and archive after completion.
+The helper reads the repository environment file, applies host defaults for
+the published database and LocalStack ports, runs current Alembic migrations,
+and enables the integration marker. Override INTEGRATION_DATABASE_URL or
+INTEGRATION_AWS_ENDPOINT_URL_S3 if the published ports differ. The tests
+exercise the real CSV upload path, PostgreSQL persistence, and LocalStack
+object storage; they clean up their generated sample, batch, and archive
+after completion. Do not run two LocalStack instances on port 4566.
 
 To reconcile old S3 batch archives that are not referenced by PostgreSQL, run the maintenance job with a grace period. The default is 24 hours:
 
@@ -272,18 +295,19 @@ export AUTH_SESSION_SECRET="$(openssl rand -hex 32)"
 docker compose up --build
 ```
 
-Open <http://localhost:8000/auth/login> to sign in through Cognito Managed Login. The callback exchanges the authorization code with PKCE, stores the access token in an HttpOnly cookie, and redirects to the map. The `/auth/logout` endpoint clears the local cookies and redirects through Cognito logout.
+Open <http://localhost:8000/auth/login> to sign in through Cognito Managed Login. The callback exchanges the authorization code with PKCE, stores the access and refresh tokens in HttpOnly cookies, and issues a separate CSRF cookie for browser writes. The frontend refreshes expired access tokens through `POST /auth/refresh`; logout revokes the refresh token when possible, clears the local cookies, and redirects through Cognito logout.
 
-The Cognito validator accepts only signed access tokens issued by the configured User Pool, checks `token_use=access`, validates the app client ID, and enforces the route scopes. The Kubernetes manifest uses Cognito mode and requires the Terraform Cognito outputs plus a strong `AUTH_SESSION_SECRET` to replace its placeholders before deployment.
+The Cognito validator accepts only signed access tokens issued by the configured User Pool, checks `token_use=access`, validates the app client ID, and enforces the route scopes. Cookie-authenticated state-changing requests require the matching CSRF header. The Kubernetes manifest sets production cookie security and requires the Terraform Cognito outputs plus a strong `AUTH_SESSION_SECRET` to replace its placeholders before deployment.
 
 ### Sample ownership and sharing
 
 New samples and CSV batches record the authenticated Cognito user's stable `sub`
 as the creator. Existing SSURGO demo records have no creator and remain visible
 as shared reference data. A creator can update or delete their own samples and
-grant another signed-in user either `viewer` or `editor` access by email. Email
-is normalized for sharing lookup, while Cognito `sub` remains the ownership
-identifier because email addresses can change.
+grant another signed-in user either `viewer` or `editor` access. Access grants
+can store a stable Cognito `sub` and authorization prefers that subject. Email
+remains a compatibility/invitation lookup when a directory-backed subject is
+not available; email is normalized and is not the ownership identifier.
 
 Map and report queries are scoped to reference records, owned records, and
 records shared with the current user. The sample management routes are:
@@ -293,6 +317,13 @@ records shared with the current user. The sample management routes are:
 - `DELETE /api/v1/soil-samples/{sample_id}` — delete an owned sample.
 - `GET|POST /api/v1/soil-samples/{sample_id}/access` — list or grant access as the owner.
 - `DELETE /api/v1/soil-samples/{sample_id}/access/{email}` — revoke access as the owner.
+
+Access grants accept an optional `user_sub` for directory-resolved identities;
+when it is present, authorization uses the stable subject before the normalized
+email compatibility lookup. The current browser invitation form uses email
+because the local demo has no Cognito directory. A production invitation flow
+should resolve the invitee through the identity provider before persisting the
+grant.
 
 Owners can archive a sample with `POST /api/v1/soil-samples/{sample_id}/archive`.
 Archived samples are excluded from maps, reports, and normal sample reads while
@@ -352,7 +383,7 @@ LAB-1001,North Field,6.4,18.25
 LAB-1002,South Field,5.9,12.00
 ```
 
-The server validates the whole file before inserting records. The original CSV is archived in S3 and each batch response includes its `source_bucket` and `source_key`. If any row is invalid or has a duplicate `sample_id`, the batch is marked `rejected`, no samples from that file are inserted, and row-level errors are returned and stored with the batch. If all rows pass, the batch is marked `completed` and each created soil sample links back to the batch.
+The server validates the whole file before inserting records. The original CSV is archived in S3, while storage bucket and object-key details remain internal. Batch records are owned by the authenticated creator and can only be retrieved by that creator. If any row is invalid or has a duplicate `sample_id`, the batch is marked `rejected`, no samples from that file are inserted, and row-level errors are returned and stored with the batch. If all rows pass, the batch is marked `completed` and each created soil sample links back to the batch.
 
 Invalid request data returns `422`, duplicate sample identifiers return `409`, and missing party or batch IDs return `404`. A valid location report with no nearby samples returns `200` with `sample_count: 0`, null date bounds, and an empty `measurements` object. Database constraint conflicts return `409`; database availability problems return `503`.
 

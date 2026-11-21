@@ -11,6 +11,7 @@ import hashlib
 import logging
 import os
 import asyncio
+import secrets
 import httpx
 from dataclasses import dataclass
 from typing import Callable
@@ -22,6 +23,7 @@ from jwt import DecodeError, InvalidTokenError, PyJWKClient, decode
 from app.logging_config import actor_id_context
 
 bearer_scheme = HTTPBearer(auto_error=False)
+CSRF_COOKIE = "soil_csrf_token"
 logger = logging.getLogger(__name__)
 _jwk_clients: dict[str, PyJWKClient] = {}
 
@@ -85,6 +87,13 @@ def _cognito_scopes(claims: dict[str, object]) -> frozenset[str]:
     return frozenset(scopes)
 
 
+def _require_csrf_token(request: Request) -> None:
+    supplied = request.headers.get("X-CSRF-Token")
+    expected = request.cookies.get(CSRF_COOKIE)
+    if not supplied or not expected or not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="CSRF validation failed")
+
+
 async def _authenticate_cognito(token: str) -> Principal:
     issuer = _cognito_issuer()
     app_client_id = os.getenv("COGNITO_APP_CLIENT_ID", "").strip()
@@ -145,7 +154,8 @@ async def get_current_principal(
 ) -> Principal:
     provider = _auth_provider()
     if provider == "cognito":
-        token = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else request.cookies.get("soil_access_token")
+        using_cookie = not credentials or credentials.scheme.lower() != "bearer"
+        token = credentials.credentials if not using_cookie else request.cookies.get("soil_access_token")
         if not token:
             logger.warning("auth.failed", extra={"path": request.url.path, "reason": "missing_bearer_token"})
             raise HTTPException(
@@ -165,6 +175,8 @@ async def get_current_principal(
                 detail="Invalid Cognito access token",
                 headers={"WWW-Authenticate": "Bearer"},
             ) from exc
+        if using_cookie and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            _require_csrf_token(request)
         actor_id_context.set(principal.subject)
         request.state.principal = principal
         return principal

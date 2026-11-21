@@ -86,6 +86,45 @@ def test_upload_accepts_valid_rows_and_assigns_owner() -> None:
     assert db.commit.await_count == 2
 
 
+def test_batch_read_is_limited_to_the_authenticated_owner() -> None:
+    owner_request = request_for_owner()
+    batch = SimpleNamespace(id=7, created_by_sub="owner-sub")
+    db = MagicMock()
+    db.scalar = AsyncMock(return_value=batch)
+
+    result = asyncio.run(
+        batches.get_soil_batch(
+            batch_id=7,
+            request=owner_request,
+            db=db,
+        )
+    )
+
+    assert result is batch
+    statement = db.scalar.await_args.args[0]
+    assert "created_by_sub" in str(statement)
+
+
+def test_batch_read_hides_batches_owned_by_another_user() -> None:
+    db = MagicMock()
+    db.scalar = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(
+            batches.get_soil_batch(
+                batch_id=7,
+                request=SimpleNamespace(
+                    state=SimpleNamespace(
+                        principal=Principal(subject="other-sub", scopes=frozenset())
+                    )
+                ),
+                db=db,
+            )
+        )
+
+    assert error.value.status_code == 404
+
+
 def test_upload_retains_archive_when_database_commit_outcome_is_ambiguous(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

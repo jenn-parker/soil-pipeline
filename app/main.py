@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 
 from app.api.routes import router
+from app.auth import CSRF_COOKIE
 from app.logging_config import (
     actor_id_context,
     configure_logging,
@@ -31,6 +32,7 @@ OAUTH_STATE_COOKIE = "soil_oauth_state"
 ACCESS_TOKEN_COOKIE = "soil_access_token"
 REFRESH_TOKEN_COOKIE = "soil_refresh_token"
 OAUTH_STATE_MAX_AGE = 600
+CSRF_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 
 
 app = FastAPI(
@@ -65,6 +67,8 @@ def _cognito_config() -> dict[str, str]:
     missing = [name for name, value in required.items() if not value]
     if missing:
         raise RuntimeError(f"Cognito OAuth configuration is missing: {', '.join(missing)}")
+    if os.getenv("APP_ENV", "development").strip().lower() == "production" and not _cookie_secure():
+        raise RuntimeError("AUTH_COOKIE_SECURE must be true in production")
     return required
 
 
@@ -107,6 +111,45 @@ def _verify_oauth_state(value: str, secret: str) -> dict[str, str | int]:
 
 def _cookie_secure() -> bool:
     return os.getenv("AUTH_COOKIE_SECURE", "false").lower() == "true"
+
+
+def _set_token_cookies(response: Response, tokens: dict[str, object]) -> None:
+    access_token = tokens.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise ValueError("Cognito did not return an access token")
+    try:
+        access_max_age = int(tokens.get("expires_in", 900))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Cognito returned an invalid access-token lifetime") from exc
+    cookie_options = {
+        "httponly": True,
+        "secure": _cookie_secure(),
+        "samesite": "lax",
+        "path": "/",
+    }
+    response.set_cookie(ACCESS_TOKEN_COOKIE, access_token, max_age=access_max_age, **cookie_options)
+    refresh_token = tokens.get("refresh_token")
+    if isinstance(refresh_token, str) and refresh_token:
+        response.set_cookie(
+            REFRESH_TOKEN_COOKIE,
+            refresh_token,
+            httponly=True,
+            secure=_cookie_secure(),
+            samesite="lax",
+            path="/auth",
+        )
+
+
+def _set_csrf_cookie(response: Response) -> None:
+    response.set_cookie(
+        CSRF_COOKIE,
+        secrets.token_urlsafe(32),
+        max_age=CSRF_COOKIE_MAX_AGE,
+        httponly=False,
+        secure=_cookie_secure(),
+        samesite="lax",
+        path="/",
+    )
 
 
 @app.get("/auth/login", include_in_schema=False)
@@ -191,48 +234,86 @@ async def auth_callback(request: Request, code: str | None = None, state: str | 
             extra={"status_code": token_response.status_code},
         )
         raise HTTPException(status_code=401, detail="Cognito authorization was rejected")
-    tokens = token_response.json()
-    access_token = tokens.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise HTTPException(status_code=502, detail="Cognito did not return an access token")
+    try:
+        tokens = token_response.json()
+        if not isinstance(tokens, dict):
+            raise ValueError("token response was not an object")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="Cognito returned an invalid token response") from exc
 
     response = RedirectResponse("/")
-    cookie_options = {
-        "httponly": True,
-        "secure": _cookie_secure(),
-        "samesite": "lax",
-        "path": "/",
-    }
-    response.set_cookie(
-        ACCESS_TOKEN_COOKIE,
-        access_token,
-        max_age=int(tokens.get("expires_in", 3600)),
-        **cookie_options,
-    )
-    refresh_token = tokens.get("refresh_token")
-    if isinstance(refresh_token, str) and refresh_token:
-        response.set_cookie(
-            REFRESH_TOKEN_COOKIE,
-            refresh_token,
-            httponly=True,
-            secure=_cookie_secure(),
-            samesite="lax",
-            path="/auth",
-        )
+    try:
+        _set_token_cookies(response, tokens)
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    _set_csrf_cookie(response)
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/auth")
     logger.info("auth.login.completed")
     return response
 
 
+@app.post("/auth/refresh", include_in_schema=False)
+async def auth_refresh(request: Request) -> Response:
+    if os.getenv("AUTH_PROVIDER", "api_key").strip().lower() != "cognito":
+        raise HTTPException(status_code=404, detail="Cognito authentication is not enabled")
+    refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
+    csrf_token = request.headers.get("X-CSRF-Token")
+    if (
+        not refresh_token
+        or not csrf_token
+        or not secrets.compare_digest(csrf_token, request.cookies.get(CSRF_COOKIE, ""))
+    ):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+    config = _cognito_config()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            token_response = await client.post(
+                f"{config['login_domain']}/oauth2/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "client_id": config["client_id"],
+                    "refresh_token": refresh_token,
+                },
+                headers={"Accept": "application/json"},
+            )
+    except httpx.HTTPError as exc:
+        logger.exception("auth.oauth_refresh_failed")
+        raise HTTPException(status_code=502, detail="Cognito token refresh failed") from exc
+    if token_response.is_error:
+        response = Response(status_code=401)
+        response.delete_cookie(ACCESS_TOKEN_COOKIE, path="/")
+        response.delete_cookie(REFRESH_TOKEN_COOKIE, path="/auth")
+        return response
+    try:
+        tokens = token_response.json()
+        if not isinstance(tokens, dict):
+            raise ValueError("token response was not an object")
+        response = Response(status_code=204)
+        _set_token_cookies(response, tokens)
+        return response
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Cognito returned an invalid refresh response") from exc
+
+
 @app.get("/auth/logout", include_in_schema=False)
-async def auth_logout() -> RedirectResponse:
+@app.post("/auth/logout", include_in_schema=False)
+async def auth_logout(request: Request) -> RedirectResponse:
+    refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
     response = RedirectResponse("/")
     response.delete_cookie(ACCESS_TOKEN_COOKIE, path="/")
     response.delete_cookie(REFRESH_TOKEN_COOKIE, path="/auth")
     response.delete_cookie(OAUTH_STATE_COOKIE, path="/auth")
+    response.delete_cookie(CSRF_COOKIE, path="/")
     if os.getenv("AUTH_PROVIDER", "api_key").strip().lower() == "cognito":
         try:
             config = _cognito_config()
+            if refresh_token:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.post(
+                        f"{config['login_domain']}/oauth2/revoke",
+                        data={"client_id": config["client_id"], "token": refresh_token},
+                        headers={"Accept": "application/json"},
+                    )
             query = urlencode(
                 {
                     "client_id": config["client_id"],
@@ -243,7 +324,8 @@ async def auth_logout() -> RedirectResponse:
             response.delete_cookie(ACCESS_TOKEN_COOKIE, path="/")
             response.delete_cookie(REFRESH_TOKEN_COOKIE, path="/auth")
             response.delete_cookie(OAUTH_STATE_COOKIE, path="/auth")
-        except RuntimeError:
+            response.delete_cookie(CSRF_COOKIE, path="/")
+        except (RuntimeError, httpx.HTTPError):
             logger.warning("auth.logout_configuration_missing")
     return response
 

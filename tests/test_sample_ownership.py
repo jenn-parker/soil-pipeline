@@ -233,6 +233,30 @@ def test_access_grant_list_and_revoke_cover_new_existing_and_missing_records() -
     asyncio.run(routes.revoke_sample_access(request_for(principal), "FIELD-7", "missing@example.com", db))
     assert db.delete.call_count == 1
 
+
+def test_access_grant_can_use_a_stable_user_subject() -> None:
+    principal = Principal(subject="owner-sub", scopes=frozenset(), email="owner@example.com")
+    db = MagicMock()
+    db.scalar = AsyncMock(side_effect=[sample(), None])
+    db.add = MagicMock()
+    db.flush = AsyncMock()
+    db.refresh = AsyncMock(
+        side_effect=lambda record: setattr(record, "created_at", datetime(2026, 1, 2, tzinfo=timezone.utc))
+    )
+
+    granted = asyncio.run(
+        routes.grant_sample_access(
+            request_for(principal),
+            "FIELD-7",
+            SampleAccessGrant(email="viewer@example.com", user_sub="viewer-sub"),
+            db,
+        )
+    )
+
+    created = db.add.call_args.args[0]
+    assert created.user_sub == "viewer-sub"
+    assert granted.user_sub == "viewer-sub"
+
     db.scalar = AsyncMock(side_effect=[sample(), None])
     with pytest.raises(HTTPException, match="owner already has access"):
         asyncio.run(
@@ -243,3 +267,32 @@ def test_access_grant_list_and_revoke_cover_new_existing_and_missing_records() -
                 db,
             )
         )
+
+
+def test_stable_subject_upgrades_a_legacy_email_grant() -> None:
+    principal = Principal(subject="owner-sub", scopes=frozenset(), email="owner@example.com")
+    legacy = SimpleNamespace(
+        soil_sample_id=7,
+        user_email="viewer@example.com",
+        user_sub=None,
+        role="viewer",
+        granted_by_sub="old-owner",
+        created_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    db = MagicMock()
+    db.scalar = AsyncMock(side_effect=[sample(), legacy])
+    db.flush = AsyncMock()
+    db.refresh = AsyncMock()
+
+    granted = asyncio.run(
+        routes.grant_sample_access(
+            request_for(principal),
+            "FIELD-7",
+            SampleAccessGrant(email="viewer@example.com", user_sub="viewer-sub", role="editor"),
+            db,
+        )
+    )
+
+    assert granted.user_sub == "viewer-sub"
+    assert legacy.user_sub == "viewer-sub"
+    assert legacy.role == "editor"

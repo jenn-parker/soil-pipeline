@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Marker, MapContainer, Popup, TileLayer } from 'react-leaflet'
 import { divIcon } from 'leaflet'
+import { apiFetch, isLocalApiKeyMode } from './api'
 import './App.css'
 
 type SoilProperties = {
@@ -84,7 +85,7 @@ function AddSamplePage() {
       }
     })
     try {
-      const response = await fetch('/api/v1/soil-samples', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const response = await apiFetch('/api/v1/soil-samples', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const result = await response.json() as { detail?: string }
       if (!response.ok) throw new Error(result.detail ?? `Sample could not be saved (${response.status}).`)
       window.location.href = '/'
@@ -113,7 +114,7 @@ function SampleEditPage({ sampleId }: { sampleId: string }) {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}`)
+    apiFetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}`)
       .then(async (response) => {
         if (!response.ok) throw new Error(response.status === 403 ? 'You do not have access to edit this sample.' : 'Sample could not be loaded.')
         setSample(await response.json() as Record<string, unknown>)
@@ -134,7 +135,7 @@ function SampleEditPage({ sampleId }: { sampleId: string }) {
       else payload[key] = value
     })
     try {
-      const response = await fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const response = await apiFetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       const result = await response.json() as { detail?: string }
       if (!response.ok) throw new Error(result.detail ?? 'Sample could not be updated.')
       window.location.href = '/'
@@ -157,10 +158,10 @@ function SampleAccessPage({ sampleId }: { sampleId: string }) {
   const [role, setRole] = useState('viewer')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const loadAccess = useCallback(() => fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access`).then(async (response) => { if (!response.ok) throw new Error('Only the sample owner can manage access.') ; setAccess(await response.json() as { email: string; role: string }[]) }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Access list could not be loaded.')), [sampleId])
+  const loadAccess = useCallback(() => apiFetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access`).then(async (response) => { if (!response.ok) throw new Error('Only the sample owner can manage access.') ; setAccess(await response.json() as { email: string; role: string }[]) }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Access list could not be loaded.')), [sampleId])
   useEffect(() => { void loadAccess() }, [loadAccess])
-  const grant = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setSaving(true); setError(null); try { const response = await fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, role }) }); const result = await response.json() as { detail?: string }; if (!response.ok) throw new Error(result.detail ?? 'Access could not be granted.'); setEmail(''); await loadAccess() } catch (reason: unknown) { setError(reason instanceof Error ? reason.message : 'Access could not be granted.') } finally { setSaving(false) } }
-  const revoke = async (userEmail: string) => { await fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access/${encodeURIComponent(userEmail)}`, { method: 'DELETE' }); await loadAccess() }
+  const grant = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setSaving(true); setError(null); try { const response = await apiFetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, role }) }); const result = await response.json() as { detail?: string }; if (!response.ok) throw new Error(result.detail ?? 'Access could not be granted.'); setEmail(''); await loadAccess() } catch (reason: unknown) { setError(reason instanceof Error ? reason.message : 'Access could not be granted.') } finally { setSaving(false) } }
+  const revoke = async (userEmail: string) => { await apiFetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/access/${encodeURIComponent(userEmail)}`, { method: 'DELETE' }); await loadAccess() }
   return <main className="app-shell form-page"><header className="topbar"><a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a><nav><a href="/">Dashboard</a><a className="signin" href="/auth/logout">Sign out</a></nav></header><section className="form-intro"><p className="eyebrow">SAMPLE MANAGEMENT / SHARING</p><h1>Manage access</h1><p className="lede">Invite another signed-in user to view or edit this sample.</p></section><section className="access-card"><form className="report-form" onSubmit={grant}><label>Email address<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="farmer@example.com" required /></label><label>Permission<select value={role} onChange={(event) => setRole(event.target.value)}><option value="viewer">Can view</option><option value="editor">Can edit</option></select></label><button className="primary-button report-button" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Grant access'}</button></form>{error && <p className="report-error">{error}</p>}<div className="access-list"><h3>Current access</h3>{access.length === 0 ? <p className="form-note">No additional users have access.</p> : access.map((entry) => <div className="access-row" key={entry.email}><span>{entry.email}</span><span>{entry.role}</span><button type="button" onClick={() => void revoke(entry.email)}>Revoke</button></div>)}</div></section></main>
 }
 
@@ -171,7 +172,7 @@ function ArchiveSamplePage({ sampleId }: { sampleId: string }) {
     setSaving(true)
     setError(null)
     try {
-      const response = await fetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/archive`, { method: 'POST' })
+      const response = await apiFetch(`/api/v1/soil-samples/${encodeURIComponent(sampleId)}/archive`, { method: 'POST' })
       const result = await response.json() as { detail?: string }
       if (!response.ok) throw new Error(result.detail ?? 'Sample could not be archived.')
       window.location.href = '/'
@@ -205,7 +206,7 @@ function MySamplesPage() {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch(`/api/v1/soil-samples/mine?include_archived=${includeArchived}`, { cache: 'no-store' })
+      const response = await apiFetch(`/api/v1/soil-samples/mine?include_archived=${includeArchived}`, { cache: 'no-store' })
       if (response.status === 401) throw new Error('Sign in to view your samples.')
       if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
       setSamples(await response.json() as ManagedSample[])
@@ -217,7 +218,7 @@ function MySamplesPage() {
   }, [includeArchived])
 
   useEffect(() => {
-    fetch(`/api/v1/soil-samples/mine?include_archived=${includeArchived}`, { cache: 'no-store' })
+    apiFetch(`/api/v1/soil-samples/mine?include_archived=${includeArchived}`, { cache: 'no-store' })
       .then(async (response) => {
         if (response.status === 401) throw new Error('Sign in to view your samples.')
         if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
@@ -234,7 +235,7 @@ function MySamplesPage() {
     setBusySampleId(sample.sample_id)
     setError(null)
     try {
-      const response = await fetch(`/api/v1/soil-samples/${encodeURIComponent(sample.sample_id)}/${action}`, { method: 'POST' })
+      const response = await apiFetch(`/api/v1/soil-samples/${encodeURIComponent(sample.sample_id)}/${action}`, { method: 'POST' })
       const result = await response.json() as { detail?: string }
       if (!response.ok) throw new Error(result.detail ?? `Sample could not be ${action}d.`)
       await loadSamples()
@@ -276,7 +277,7 @@ function App() {
     setError(null)
     const query = new URLSearchParams({ west: String(bounds.west), south: String(bounds.south), east: String(bounds.east), north: String(bounds.north), limit: '1000' })
     try {
-      const response = await fetch(`/api/v1/maps/soil-samples?${query}`, { cache: 'no-store' })
+      const response = await apiFetch(`/api/v1/maps/soil-samples?${query}`, { cache: 'no-store' })
       if (response.status === 401) throw new Error('Sign in to view soil samples.')
       if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
       setSamples((await response.json() as SoilFeatureCollection).features)
@@ -290,7 +291,7 @@ function App() {
 
   useEffect(() => {
     const query = new URLSearchParams({ west: String(bounds.west), south: String(bounds.south), east: String(bounds.east), north: String(bounds.north), limit: '1000' })
-    fetch(`/api/v1/maps/soil-samples?${query}`, { cache: 'no-store' })
+    apiFetch(`/api/v1/maps/soil-samples?${query}`, { cache: 'no-store' })
       .then(async (response) => {
         if (response.status === 401) throw new Error('Sign in to view soil samples.')
         if (!response.ok) throw new Error(`The sample service returned ${response.status}.`)
@@ -352,7 +353,7 @@ function App() {
       if (reportYieldUnit) payload.yield_goal_unit = reportYieldUnit
       if (reportSoilLab) payload.soil_test_lab = reportSoilLab
       if (reportSoilMethod) payload.soil_test_method = reportSoilMethod
-      const response = await fetch('/api/v1/recommendations/location', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      const response = await apiFetch('/api/v1/recommendations/location', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (response.status === 401) throw new Error('Sign in to run a soil report.')
       const result = await response.json() as LocationRecommendation | { detail?: string }
       if (!response.ok) throw new Error('detail' in result && result.detail ? result.detail : `The recommendation service returned ${response.status}.`)
@@ -389,7 +390,7 @@ function App() {
     try {
       const formData = new FormData()
       formData.append('file', uploadFile)
-      const response = await fetch('/api/v1/soil-batches', { method: 'POST', body: formData })
+      const response = await apiFetch('/api/v1/soil-batches', { method: 'POST', body: formData })
       const payload = await response.json() as BatchResult | { detail?: string }
       if (!response.ok) throw new Error('detail' in payload && payload.detail ? payload.detail : `Upload failed with ${response.status}.`)
       setUploadResult(payload as BatchResult)
@@ -408,7 +409,7 @@ function App() {
         <a className="brand" href="/"><span className="brand-mark">SP</span><span>Soil Pipeline</span></a>
         <nav>
           <a href="/samples">My samples</a><a href="/samples/new">Add sample</a><a href="/docs" target="_blank" rel="noreferrer">API docs</a>
-          {loading || error ? <a className="signin" href="/auth/login">Sign in</a> : <a className="signin" href="/auth/logout">Sign out</a>}
+          {isLocalApiKeyMode ? <span className="signin">Local demo</span> : loading || error ? <a className="signin" href="/auth/login">Sign in</a> : <a className="signin" href="/auth/logout">Sign out</a>}
         </nav>
       </header>
       <section className="intro">

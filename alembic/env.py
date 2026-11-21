@@ -69,6 +69,10 @@ async def run_async_migrations() -> None:
         # Keep extension-owned tiger/topology objects out of reflection. The
         # PostGIS image adds these schemas to its default search path.
         await connection.execute(text("SET search_path TO public"))
+        # SQLAlchemy begins an implicit transaction for the SET statement.
+        # Finish it before Alembic opens its migration transaction so schema
+        # changes and the alembic_version update are committed together.
+        await connection.commit()
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
 

@@ -39,6 +39,7 @@ In a second terminal:
 ```bash
 cd frontend
 npm ci
+cp .env.example .env.local
 npm run dev -- --host 127.0.0.1 > /tmp/soil-pipeline-vite.log 2>&1 &
 ```
 
@@ -51,11 +52,33 @@ curl -i http://localhost:8000/health/live
 curl -i http://localhost:8000/health/ready
 ```
 
-Sign in through the frontend, then verify that the map loads. Add a sample manually or upload the demo CSV to exercise ownership and map behavior.
+### 5. Bootstrap the local demo data
 
-### 5. Load the attributed demo data
+From the repository root, run:
 
-The representative Iowa records are documented in [`data/seed/README.md`](../data/seed/README.md). The data is derived from USDA NRCS SSURGO and is clearly labeled as representative demo data rather than physical farm samples.
+```bash
+python scripts/bootstrap_demo.py
+```
+
+The bootstrap is intentionally explicit and local-only. It loads the
+representative SSURGO reference records directly into PostgreSQL, then uploads
+`data/seed/demo-owned-batch.csv` through the authenticated API using
+`local-demo-key`. That exercises the normal batch validation, S3 archival,
+ownership, and sample-creation paths. It is idempotent after a complete seed.
+Set `DEMO_API_KEY` if `AUTH_API_KEYS` uses a different local key. The script
+does not create or contact Cognito users.
+
+Open <http://localhost:5173>, verify that the map loads, and use **My samples**
+to confirm that the demo-owned records can be edited, shared, archived, and
+restored.
+
+### 6. Load the attributed demo data manually
+
+The bootstrap already loads the reference records. If only the attributed
+reference data is needed, use the manual SQL seed documented in
+[`data/seed/README.md`](../data/seed/README.md). The data is derived from USDA
+NRCS SSURGO and is clearly labeled as representative demo data rather than
+physical farm samples.
 
 ## Common local operations
 

@@ -7,5 +7,6 @@
     "python.testing.cwd": "${workspaceFolder}",
     "python.testing.pytestPath": "/Users/jennparker/.pyenv/versions/soil-pipeline/bin/pytest",
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
+    "python.testing.pytestEnabled": true,
+    "python.terminal.useEnvFile": true
 }

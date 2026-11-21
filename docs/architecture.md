@@ -50,6 +50,7 @@ The API enforces access at the route and data-query layers:
 - Scope checks distinguish read, write, and batch-upload operations.
 - Sample owners can edit, share, archive, restore, or delete their samples.
 - Shared users receive viewer or editor access.
+- Access grants prefer stable identity subjects and retain normalized email lookup as a compatibility path for pending invitations.
 - Reference/demo records without an owner remain readable but are not editable.
 - Archived samples are excluded from normal map and report queries.
 
@@ -67,7 +68,7 @@ Uploads persist a durable archive intent in PostgreSQL before writing to S3. Eac
 
 ### Authentication and authorization
 
-The application supports a lightweight API-key provider for local testing and Amazon Cognito for the OAuth-enabled demo flow. Cognito uses a public web client with the authorization-code flow and PKCE. The API validates the authenticated session and applies route scopes and sample-level authorization.
+The application supports a lightweight API-key provider for local testing and Amazon Cognito for the OAuth-enabled demo flow. Cognito uses a public web client with the authorization-code flow and PKCE. Access and refresh tokens are held in HttpOnly cookies, browser writes use a separate CSRF token, expired access tokens refresh through the backend, and logout attempts refresh-token revocation. The API validates the authenticated session and applies route scopes and sample-level authorization.
 
 IAM is split by purpose:
 

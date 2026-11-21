@@ -8,11 +8,20 @@ From the repository root:
 
 ```bash
 docker compose up -d --build
+python scripts/bootstrap_demo.py
 cd frontend
+npm ci
+cp .env.example .env.local
 npm run dev -- --host 127.0.0.1 > /tmp/soil-pipeline-vite.log 2>&1 &
 ```
 
-Open <http://localhost:5173>. Use the Cognito sign-in flow when demonstrating OAuth. The local API-key mode is available as a fallback for a quick offline demo.
+The bootstrap command loads the representative SSURGO records and uploads a
+small deterministic batch through the API using the local `local-demo-key`
+principal. It is safe to rerun and does not create a Cognito account. Open
+<http://localhost:5173>. Use the Cognito sign-in flow when demonstrating OAuth;
+the local API-key mode remains the offline fallback. The copied frontend
+`.env.local` sends the local demo key with API requests; it is not a secret and
+must not be used in a deployed build.
 
 ## 1. Introduce the product
 
@@ -86,7 +95,7 @@ Say:
 
 1. Return to the dashboard.
 2. Open **View CSV format and example**.
-3. Choose `data/seed/ssurgo-iowa-demo.csv`, or use a small fictional CSV.
+3. Choose `data/seed/demo-owned-batch.csv`, `data/seed/ssurgo-iowa-demo.csv`, or use a small fictional CSV.
 4. Upload the batch.
 5. Point out accepted and rejected row counts.
 6. Refresh the map and show the imported locations.

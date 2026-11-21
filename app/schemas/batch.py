@@ -11,8 +11,6 @@ class BatchRowError(BaseModel):
 class SoilSampleBatchRead(BaseModel):
     id: int
     filename: str
-    source_bucket: str | None = None
-    source_key: str | None = None
     status: str
     total_rows: int
     accepted_rows: int

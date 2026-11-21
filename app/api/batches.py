@@ -156,6 +156,7 @@ async def upload_soil_batch(
     lease_until = datetime.now(timezone.utc) + ARCHIVE_LEASE_DURATION
     batch = SoilSampleBatch(
         filename=filename,
+        created_by_sub=_principal(request).subject,
         status="processing",
         total_rows=total_rows,
         accepted_rows=accepted_rows,
@@ -333,9 +334,15 @@ async def upload_soil_batch(
 )
 async def get_soil_batch(
     batch_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db_session),
 ) -> SoilSampleBatch:
-    batch = await db.get(SoilSampleBatch, batch_id)
+    batch = await db.scalar(
+        select(SoilSampleBatch).where(
+            SoilSampleBatch.id == batch_id,
+            SoilSampleBatch.created_by_sub == _principal(request).subject,
+        )
+    )
     if batch is None:
         raise HTTPException(status_code=404, detail="Soil upload batch not found")
     return batch

@@ -35,6 +35,10 @@ spec:
           env:
             - name: AUTH_PROVIDER
               value: cognito
+            - name: APP_ENV
+              value: production
+            - name: AUTH_COOKIE_SECURE
+              value: "true"
             - name: COGNITO_ISSUER
               value: REPLACE_WITH_COGNITO_ISSUER
             - name: COGNITO_APP_CLIENT_ID

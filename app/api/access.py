@@ -22,7 +22,15 @@ async def list_sample_access(
 ) -> list[SampleAccessRead]:
     db_sample = await _get_owned_sample(sample_id, _principal(request), db)
     records = (await db.scalars(select(SoilSampleAccess).where(SoilSampleAccess.soil_sample_id == db_sample.id).order_by(SoilSampleAccess.user_email))).all()
-    return [SampleAccessRead(email=record.user_email, role=record.role, granted_at=record.created_at) for record in records]
+    return [
+        SampleAccessRead(
+            email=record.user_email,
+            user_sub=getattr(record, "user_sub", None),
+            role=record.role,
+            granted_at=record.created_at,
+        )
+        for record in records
+    ]
 
 
 @router.post(
@@ -42,21 +50,37 @@ async def grant_sample_access(
     principal = _principal(request)
     db_sample = await _get_owned_sample(sample_id, principal, db)
     email = str(grant.email).strip().lower()
-    if principal.email == email:
+    user_sub = grant.user_sub.strip() if grant.user_sub else None
+    if principal.email == email or user_sub == principal.subject:
         raise HTTPException(status_code=400, detail="The owner already has access")
-    record = await db.scalar(select(SoilSampleAccess).where(
-        SoilSampleAccess.soil_sample_id == db_sample.id,
-        func.lower(SoilSampleAccess.user_email) == email,
-    ))
+    target_filter = func.lower(SoilSampleAccess.user_email) == email
+    if user_sub:
+        target_filter = (SoilSampleAccess.user_sub == user_sub) | (
+            SoilSampleAccess.user_sub.is_(None) & target_filter
+        )
+    record = await db.scalar(select(SoilSampleAccess).where(SoilSampleAccess.soil_sample_id == db_sample.id, target_filter))
     if record is None:
-        record = SoilSampleAccess(soil_sample_id=db_sample.id, user_email=email, role=grant.role, granted_by_sub=principal.subject)
+        record = SoilSampleAccess(
+            soil_sample_id=db_sample.id,
+            user_email=email,
+            user_sub=user_sub,
+            role=grant.role,
+            granted_by_sub=principal.subject,
+        )
         db.add(record)
     else:
+        record.user_email = email
+        record.user_sub = user_sub
         record.role = grant.role
         record.granted_by_sub = principal.subject
     await db.flush()
     await db.refresh(record)
-    return SampleAccessRead(email=record.user_email, role=record.role, granted_at=record.created_at)
+    return SampleAccessRead(
+        email=record.user_email,
+        user_sub=getattr(record, "user_sub", None),
+        role=record.role,
+        granted_at=record.created_at,
+    )
 
 
 @router.delete(

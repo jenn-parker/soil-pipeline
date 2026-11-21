@@ -40,6 +40,7 @@ def test_missing_context_and_guidance_cover_complete_context() -> None:
 
 
 def test_ai_explanation_requires_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_EXPLANATION_MODE", "live")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     request = LocationRecommendationRequest(latitude=42, longitude=-93, radius_km=10)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):

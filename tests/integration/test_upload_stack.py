@@ -252,7 +252,9 @@ def test_real_expired_lease_fences_stale_uploader(
         await release_uploader.wait()
         return result
 
-    monkeypatch.setattr(routes, "archive_batch_upload", gated_archive)
+    # upload_soil_batch binds the imported storage function in app.api.batches;
+    # patch that lookup site rather than the aggregate routes module.
+    monkeypatch.setattr("app.api.batches.archive_batch_upload", gated_archive)
 
     async def scenario() -> None:
         nonlocal batch_id, source_bucket, source_key

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from geoalchemy2 import Geography
 from geoalchemy2.elements import WKBElement, WKTElement
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
@@ -91,11 +91,19 @@ class SoilSampleAccess(Base):
             "user_email",
             name="uq_soil_sample_access_sample_email",
         ),
+        Index(
+            "uq_soil_sample_access_sample_sub",
+            "soil_sample_id",
+            "user_sub",
+            unique=True,
+            postgresql_where=text("user_sub IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     soil_sample_id: Mapped[int] = mapped_column(ForeignKey("soil_samples.id", ondelete="CASCADE"), nullable=False, index=True)
     user_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    user_sub: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="viewer")
     granted_by_sub: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

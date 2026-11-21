@@ -12,6 +12,8 @@ class SoilSampleBatch(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Nullable for batches created before ownership tracking was introduced.
+    created_by_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     source_bucket: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     archive_status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")

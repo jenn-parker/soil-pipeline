@@ -9,10 +9,9 @@ from app.database import get_db_session
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    import os
-
-    os.environ["AUTH_API_KEYS"] = "test-key=soil:read,soil:write,batch:upload"
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    monkeypatch.setenv("AUTH_PROVIDER", "api_key")
+    monkeypatch.setenv("AUTH_API_KEYS", "test-key=soil:read,soil:write,batch:upload")
     app = FastAPI()
     app.include_router(router)
 

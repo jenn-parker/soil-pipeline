@@ -18,3 +18,9 @@ To load the records into the local PostGIS database from the repository root:
 ```bash
 docker compose exec -T db psql -U earth_user -d soil_db < scripts/seed_ssurgo_demo.sql
 ```
+
+The complete local portfolio setup also includes
+`demo-owned-batch.csv`. Run `python scripts/bootstrap_demo.py` from the
+repository root to load the reference data and upload that file through the
+authenticated API. The upload is owned by the local `local-demo-key` principal
+and is safe to rerun.

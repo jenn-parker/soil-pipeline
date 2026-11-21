@@ -8,6 +8,7 @@ from app.database import get_db_session
 
 
 def make_client(api_keys: str, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("AUTH_PROVIDER", "api_key")
     monkeypatch.setenv("AUTH_API_KEYS", api_keys)
     app = FastAPI()
     app.include_router(router)

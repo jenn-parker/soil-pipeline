@@ -62,3 +62,15 @@ def test_unsupported_auth_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(HTTPException, match="not supported") as unsupported:
         asyncio.run(auth.get_current_principal(request(), None))
     assert unsupported.value.status_code == 503
+
+
+def test_csrf_token_requires_a_matching_cookie_and_header() -> None:
+    protected_request = request()
+    protected_request.headers = {"X-CSRF-Token": "csrf-value"}
+    protected_request.cookies = {auth.CSRF_COOKIE: "csrf-value"}
+    auth._require_csrf_token(protected_request)
+
+    protected_request.headers = {"X-CSRF-Token": "wrong-value"}
+    with pytest.raises(HTTPException, match="CSRF") as error:
+        auth._require_csrf_token(protected_request)
+    assert error.value.status_code == 403

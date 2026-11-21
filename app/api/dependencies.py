@@ -22,7 +22,13 @@ def _accessible_sample_filter(principal: Principal):
     if principal.email:
         shared = select(SoilSampleAccess.id).where(
             SoilSampleAccess.soil_sample_id == SoilTestResult.id,
-            func.lower(SoilSampleAccess.user_email) == principal.email,
+            or_(
+                SoilSampleAccess.user_sub == principal.subject,
+                (
+                    SoilSampleAccess.user_sub.is_(None)
+                    & (func.lower(SoilSampleAccess.user_email) == principal.email)
+                ),
+            ),
         ).exists()
     return and_(
         SoilTestResult.archived_at.is_(None),
@@ -54,7 +60,13 @@ async def _get_editable_sample(sample_id: str, principal: Principal, db: AsyncSe
     if principal.email:
         can_edit = await db.scalar(select(SoilSampleAccess.id).where(
             SoilSampleAccess.soil_sample_id == sample.id,
-            func.lower(SoilSampleAccess.user_email) == principal.email,
+            or_(
+                SoilSampleAccess.user_sub == principal.subject,
+                (
+                    SoilSampleAccess.user_sub.is_(None)
+                    & (func.lower(SoilSampleAccess.user_email) == principal.email)
+                ),
+            ),
             SoilSampleAccess.role == "editor",
         ))
         if can_edit:

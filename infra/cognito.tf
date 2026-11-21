@@ -82,6 +82,11 @@ resource "aws_cognito_user_pool_client" "soil_pipeline" {
   id_token_validity      = 60
   refresh_token_validity = 30
 
+  refresh_token_rotation {
+    feature                    = "ENABLED"
+    retry_grace_period_seconds = 10
+  }
+
   token_validity_units {
     access_token  = "minutes"
     id_token      = "minutes"
