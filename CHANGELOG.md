@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/jenn-parker/soil-pipeline/compare/v1.1.0...v1.2.0) (2026-11-21)
+
+
+### Features
+
+* align API version with release metadata ([ca56662](https://github.com/jenn-parker/soil-pipeline/commit/ca56662a7605a5567c7e73bc994794b554a29031))
+* align API version with release metadata ([80113ee](https://github.com/jenn-parker/soil-pipeline/commit/80113ee53455de7a23a808bd022e0103c663664a))
+
 ## [1.1.0](https://github.com/jenn-parker/soil-pipeline/compare/v1.0.0...v1.1.0) (2026-11-21)
 
 
