@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import secrets
+from pathlib import Path
 from time import perf_counter
 from time import time
 from urllib.parse import urlencode
@@ -35,13 +36,18 @@ OAUTH_STATE_MAX_AGE = 600
 CSRF_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 
 
+def _read_app_version() -> str:
+    version_path = Path(__file__).resolve().parents[1] / "version.txt"
+    return version_path.read_text(encoding="utf-8").strip()
+
+
 app = FastAPI(
     title="Soil Metric Ingestion Pipeline API",
     description=(
         "Create individual soil samples or upload CSV batches. "
         "Batch uploads validate every row before saving any samples."
     ),
-    version="1.0.0",
+    version=_read_app_version(),
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
