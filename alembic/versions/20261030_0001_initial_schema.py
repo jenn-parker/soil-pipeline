@@ -47,7 +47,13 @@ def upgrade() -> None:
         "soil_samples",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("batch_id", sa.Integer(), nullable=True),
-        sa.Column("location", Geography(geometry_type="POINT", srid=4326), nullable=True),
+        # Keep spatial-index creation explicit below; Geography otherwise adds
+        # the same GiST index implicitly during table creation.
+        sa.Column(
+            "location",
+            Geography(geometry_type="POINT", srid=4326, spatial_index=False),
+            nullable=True,
+        ),
         sa.Column("sample_id", sa.String(length=50), nullable=False),
         sa.Column("field_name", sa.String(length=100), nullable=True),
         sa.Column("sampled_at", sa.DateTime(timezone=True), nullable=False),
