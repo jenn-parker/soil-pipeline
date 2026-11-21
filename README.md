@@ -35,6 +35,10 @@ AWS foundation procedures are documented in the
 [`deployment runbook`](docs/deployment-runbook.md).
 The interview-ready walkthrough is in the
 [`demo script`](docs/demo-script.md).
+New contributions follow the release-oriented commit conventions in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Release Please creates reviewed release
+PRs and semantic GitHub releases from new Conventional Commits; existing
+history is intentionally preserved.
 
 The upload fencing and reconciliation behavior is also illustrated in the
 architecture diagrams:
