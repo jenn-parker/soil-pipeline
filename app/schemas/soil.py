@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 
@@ -77,6 +77,12 @@ class SoilTestResultBase(BaseModel):
     sodium_saturation_pct: Decimal | None = Field(None, ge=0, le=100, max_digits=5, decimal_places=2)
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def validate_coordinate_pair(self) -> "SoilTestResultBase":
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("latitude and longitude must be provided together")
+        return self
 
 class SoilTestResultCreate(SoilTestResultBase):
     pass

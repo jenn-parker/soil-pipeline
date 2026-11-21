@@ -32,6 +32,23 @@ docker compose up -d --build
 
 The API is available at <http://localhost:8000>. Compose applies the Alembic migrations before starting the API.
 
+Verify the migration state from the host using the running API container:
+
+```bash
+docker compose exec web alembic current
+docker compose exec web alembic heads
+```
+
+The current head is `20261121_0007`. If the database is behind, run:
+
+```bash
+docker compose exec web alembic upgrade head
+```
+
+If a migration fails while validating legacy data, inspect and correct the
+reported rows before retrying. Do not use `alembic stamp` to bypass a failed
+schema change; the revision table must match the physical schema.
+
 ### 3. Start the frontend
 
 In a second terminal:
@@ -114,6 +131,7 @@ Run the same checks used by GitHub Actions:
 
 ```bash
 .venv/bin/python -m pytest -q
+./scripts/run_integration_tests.sh
 cd frontend && npm ci && npm run lint && npm run build
 cd ../infra && terraform fmt -check -recursive && terraform init -backend=false && terraform validate
 cd .. && docker build --tag soil-pipeline-api:check .

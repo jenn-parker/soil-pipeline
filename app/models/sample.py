@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -38,6 +38,36 @@ class Party(Base):
 
 class SampleProvenance(Base):
     __tablename__ = "sample_identifications"
+    __table_args__ = (
+        CheckConstraint(
+            "latitude IS NULL OR latitude BETWEEN -90 AND 90",
+            name="ck_sample_identifications_latitude_range",
+        ),
+        CheckConstraint(
+            "longitude IS NULL OR longitude BETWEEN -180 AND 180",
+            name="ck_sample_identifications_longitude_range",
+        ),
+        CheckConstraint(
+            "(latitude IS NULL) = (longitude IS NULL)",
+            name="ck_sample_identifications_coordinate_pair",
+        ),
+        CheckConstraint(
+            "elevation_meters IS NULL OR elevation_meters BETWEEN -400 AND 9000",
+            name="ck_sample_identifications_elevation_range",
+        ),
+        CheckConstraint(
+            "gps_accuracy_meters IS NULL OR gps_accuracy_meters >= 0",
+            name="ck_sample_identifications_gps_accuracy_nonnegative",
+        ),
+        CheckConstraint(
+            "sampling_depth_cm IS NULL OR sampling_depth_cm >= 0",
+            name="ck_sample_identifications_sampling_depth_nonnegative",
+        ),
+        CheckConstraint(
+            "cores_per_composite IS NULL OR cores_per_composite >= 1",
+            name="ck_sample_identifications_cores_positive",
+        ),
+    )
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     soil_sample_id: Mapped[int | None] = mapped_column(

@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 
@@ -49,6 +49,14 @@ class SampleProvenanceBase(BaseModel):
     sampling_method: str | None = Field(None, max_length=100, description="Pattern used to survey layout e.g. 2.5ac grid")
     previous_crop: str | None = Field(None, max_length=100, description="Vegetation background info to help compute target N-P-K recommendation offsets")
     notes: str | None = Field(None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_consistent_provenance(self) -> "SampleProvenanceBase":
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("latitude and longitude must be provided together")
+        if self.received_date is not None and self.received_date < self.collection_date:
+            raise ValueError("received_date cannot be before collection_date")
+        return self
 
 class SampleProvenanceCreate(SampleProvenanceBase):
     owner_id: int

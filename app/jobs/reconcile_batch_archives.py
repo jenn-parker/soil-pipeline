@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session_factory
 from app.models.batch import SoilSampleBatch
 from app.services.object_storage import discard_batch_upload, list_batch_objects
+from app.services.batch_state import transition_archive_status
 
 logger = logging.getLogger(__name__)
 BATCH_ARCHIVE_PREFIX = "soil-batches/"
@@ -168,7 +169,7 @@ async def _prepare_for_delete(
                 and locked_batch.archive_lease_until > current_time
             ):
                 return False
-            locked_batch.archive_status = "abandoned"
+            transition_archive_status(locked_batch, "abandoned")
             locked_batch.archive_lease_until = None
             locked_batch.archive_fenced_at = current_time
             locked_batch.archive_fence_reason = "lease_expired"

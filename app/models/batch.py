@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, Integer, JSON, String
+from sqlalchemy import CheckConstraint, DateTime, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -9,6 +9,25 @@ from app.database import Base
 
 class SoilSampleBatch(Base):
     __tablename__ = "soil_upload_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('processing', 'completed', 'rejected', 'failed')",
+            name="ck_soil_upload_batches_status",
+        ),
+        CheckConstraint(
+            "archive_status IN ('pending', 'archived', 'failed', 'abandoned')",
+            name="ck_soil_upload_batches_archive_status",
+        ),
+        CheckConstraint(
+            "total_rows >= 0 AND accepted_rows >= 0 AND rejected_rows >= 0 "
+            "AND accepted_rows + rejected_rows <= total_rows",
+            name="ck_soil_upload_batches_row_counts",
+        ),
+        CheckConstraint(
+            "status = 'processing' OR accepted_rows + rejected_rows = total_rows",
+            name="ck_soil_upload_batches_final_row_counts",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)

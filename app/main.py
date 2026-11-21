@@ -359,10 +359,23 @@ async def request_logging_middleware(request: Request, call_next):
 
 @app.exception_handler(IntegrityError)
 async def handle_integrity_error(request: Request, exc: IntegrityError) -> JSONResponse:
-    logger.info("database.constraint_rejected", extra={"method": request.method, "path": request.url.path})
+    database_error = str(getattr(exc, "orig", exc)).lower()
+    if "check constraint" in database_error or "ck_" in database_error:
+        status_code = 422
+        detail = "The request contains values that violate a data constraint."
+        event = "database.validation_rejected"
+    elif "foreign key" in database_error or "unique constraint" in database_error or "duplicate key" in database_error:
+        status_code = 409
+        detail = "The request conflicts with existing data or a database constraint."
+        event = "database.constraint_rejected"
+    else:
+        status_code = 409
+        detail = "The request conflicts with existing data or a database constraint."
+        event = "database.constraint_rejected"
+    logger.info(event, extra={"method": request.method, "path": request.url.path})
     return JSONResponse(
-        status_code=409,
-        content={"detail": "The request conflicts with existing data or a database constraint."},
+        status_code=status_code,
+        content={"detail": detail, "request_id": request_id_context.get()},
     )
 
 
@@ -371,7 +384,10 @@ async def handle_database_unavailable(request: Request, exc: OperationalError) -
     logger.exception("database.unavailable", extra={"method": request.method, "path": request.url.path})
     return JSONResponse(
         status_code=503,
-        content={"detail": "The database is temporarily unavailable. Please try again."},
+        content={
+            "detail": "The database is temporarily unavailable. Please try again.",
+            "request_id": request_id_context.get(),
+        },
     )
 
 
@@ -380,7 +396,22 @@ async def handle_database_error(request: Request, exc: SQLAlchemyError) -> JSONR
     logger.exception("database.operation_failed", extra={"method": request.method, "path": request.url.path})
     return JSONResponse(
         status_code=500,
-        content={"detail": "The request could not be completed because of a database error."},
+        content={
+            "detail": "The request could not be completed because of a database error.",
+            "request_id": request_id_context.get(),
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("request.unhandled_exception", extra={"method": request.method, "path": request.url.path})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "The request could not be completed. Please try again.",
+            "request_id": request_id_context.get(),
+        },
     )
 
 

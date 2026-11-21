@@ -26,8 +26,13 @@ def configured_db() -> MagicMock:
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
     db.execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
+    refresh_count = 0
+
     async def refresh(instance: object, **kwargs: object) -> None:
+        nonlocal refresh_count
         if not kwargs.get("with_for_update"):
+            refresh_count += 1
+        if refresh_count > 1:
             instance.status = "completed" if instance.accepted_rows else "rejected"
             instance.archive_status = "archived"
             instance.archive_lease_until = None

@@ -53,12 +53,18 @@ The API enforces access at the route and data-query layers:
 - Access grants prefer stable identity subjects and retain normalized email lookup as a compatibility path for pending invitations.
 - Reference/demo records without an owner remain readable but are not editable.
 - Archived samples are excluded from normal map and report queries.
+- API schemas and database check constraints enforce coordinate pairs, measurement ranges, batch states, and nonnegative row-count invariants.
+- Batch state transitions are guarded in application code, and finalized batches must reconcile accepted and rejected row counts to their total.
 
 ### Database
 
 PostgreSQL with PostGIS stores soil results, upload batches, provenance, parties, and sample-sharing records. A geographic point and GiST index support location-based reports and map queries.
 
-Alembic is the source of truth for schema migrations. The current ownership and archive behavior is represented by the sample ownership and archiving revisions.
+Alembic is the source of truth for schema migrations. The current migration
+head is `20261121_0007`. Ownership, archive behavior, and data invariants are
+represented by migrations rather than relying only on ORM metadata. Compose
+applies `alembic upgrade head` before starting the development API; production
+should run the same command as a controlled migration job.
 
 ### Object storage
 
@@ -69,6 +75,12 @@ Uploads persist a durable archive intent in PostgreSQL before writing to S3. Eac
 ### Authentication and authorization
 
 The application supports a lightweight API-key provider for local testing and Amazon Cognito for the OAuth-enabled demo flow. Cognito uses a public web client with the authorization-code flow and PKCE. Access and refresh tokens are held in HttpOnly cookies, browser writes use a separate CSRF token, expired access tokens refresh through the backend, and logout attempts refresh-token revocation. The API validates the authenticated session and applies route scopes and sample-level authorization.
+
+Database failures are translated into stable client responses: validation/check
+constraint failures are `422`, uniqueness and foreign-key conflicts are `409`,
+availability failures are `503`, and unexpected failures are generic `500`
+responses. Each request receives an `X-Request-ID`; the ID is also included in
+structured logs and database/unexpected-error responses for support correlation.
 
 IAM is split by purpose:
 

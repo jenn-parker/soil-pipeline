@@ -21,6 +21,12 @@ from app.models.soil import SoilTestResult
 from app.schemas.batch import SoilSampleBatchRead
 from app.schemas.soil import SoilTestResultCreate
 from app.services.object_storage import archive_batch_upload, discard_batch_upload
+from app.services.batch_state import (
+    transition_archive_status,
+    transition_batch_status,
+    validate_archive_status_transition,
+    validate_batch_status_transition,
+)
 
 logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -196,8 +202,8 @@ async def upload_soil_batch(
             pass
         try:
             await db.refresh(batch)
-            batch.archive_status = "failed"
-            batch.status = "failed"
+            transition_archive_status(batch, "failed")
+            transition_batch_status(batch, "failed")
             batch.archive_lease_until = None
             batch.completed_at = datetime.now(timezone.utc)
             await db.commit()
@@ -261,6 +267,8 @@ async def upload_soil_batch(
 
         final_status = "rejected" if row_errors else "completed"
         final_time = datetime.now(timezone.utc)
+        validate_archive_status_transition(batch.archive_status, "archived")
+        validate_batch_status_transition(batch.status, final_status)
         finalization = await db.execute(
             update(SoilSampleBatch)
             .where(
@@ -272,7 +280,6 @@ async def upload_soil_batch(
             .values(
                 status=final_status,
                 completed_at=final_time,
-                archive_status="archived",
                 archive_lease_until=None,
                 archive_fenced_at=None,
                 archive_fence_reason=None,
@@ -287,6 +294,11 @@ async def upload_soil_batch(
             )
             raise HTTPException(status_code=409, detail="Batch upload lease is no longer valid")
         await db.commit()
+        # Reflect the committed transition in the ORM object only after the
+        # commit succeeds; an ambiguous commit must leave the in-memory state
+        # at the safe pending value.
+        transition_archive_status(batch, "archived")
+        transition_batch_status(batch, final_status)
         await db.refresh(batch)
     except HTTPException:
         raise

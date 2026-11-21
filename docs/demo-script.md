@@ -1,8 +1,24 @@
-# Soil Pipeline Demo Script
+# Hiring Manager Walkthrough
 
-This walkthrough is designed for a five-to-ten-minute interview or portfolio demonstration. It highlights the product workflow first, then briefly connects the experience to the implementation.
+This is a short, self-guided walkthrough for someone reviewing the project
+without a live presentation. It is designed to demonstrate both the product
+experience and the engineering decisions behind it in roughly five minutes.
 
-## Before the demo
+## What this project demonstrates
+
+Soil Pipeline is a full-stack soil-data workspace built around four concerns:
+
+- ingesting and validating soil records from individual forms or CSV batches;
+- using PostgreSQL/PostGIS for spatial search and reporting;
+- enforcing ownership, sharing, archiving, and route-level authorization; and
+- operating a realistic OAuth, object-storage, migration, and testing workflow
+  without requiring a deployed AWS environment.
+
+The project is intentionally runnable locally. LocalStack replaces S3, while
+Terraform documents the AWS authentication, storage, and IAM foundation that a
+future deployment would use.
+
+## Start the demo
 
 From the repository root:
 
@@ -12,112 +28,102 @@ python scripts/bootstrap_demo.py
 cd frontend
 npm ci
 cp .env.example .env.local
-npm run dev -- --host 127.0.0.1 > /tmp/soil-pipeline-vite.log 2>&1 &
+npm run dev -- --host 127.0.0.1
 ```
 
-The bootstrap command loads the representative SSURGO records and uploads a
-small deterministic batch through the API using the local `local-demo-key`
-principal. It is safe to rerun and does not create a Cognito account. Open
-<http://localhost:5173>. Use the Cognito sign-in flow when demonstrating OAuth;
-the local API-key mode remains the offline fallback. The copied frontend
-`.env.local` sends the local demo key with API requests; it is not a secret and
-must not be used in a deployed build.
+Open <http://localhost:5173>. The bootstrap is idempotent and creates
+representative reference data plus a small batch owned by the local demo
+principal. The default frontend uses the local API-key mode; it is a
+development convenience, not a production credential. The Cognito flow is
+available separately when demonstrating the OAuth implementation.
 
-## 1. Introduce the product
+## Suggested walkthrough
 
-Say:
+### 1. Show the product workflow
 
-> Soil Pipeline is a secure workspace for locating soil samples, reviewing field context, and managing traceable soil data. I built it to demonstrate a complete path from data ingestion through spatial reporting and sample-level authorization.
+Start on the map and point out that the data is representative Iowa soil-survey
+data, clearly attributed in the repository. Open a marker, change the
+measurement used for coloring, and run a nearby report.
 
-Point out the dashboard, connection status, map, measurement summary, and upload workflow.
+Highlight that the report returns ranges and per-measurement sample counts
+rather than treating nearby samples as one composite result.
 
-## 2. Explore the map
+Open the recommendation panel and enter optional crop and management context.
+The AI explanation is explicitly opt-in and receives aggregate measurements and
+caller-provided context—not exact coordinates or sample identifiers. Its role
+is explanation, not agronomic prescription.
 
-1. Explain that the initial markers are representative Iowa records derived from USDA NRCS SSURGO data.
-2. Click a marker such as Ames, Mason City, or Sioux City.
-3. Show the popup measurements and the coordinates copied into the report form.
-4. Change the **Color by** selector from pH to organic matter or texture.
-5. Run a nearby report and point out the sample count, date window, and measurement ranges.
-6. Expand **Add recommendation context**, enter `Corn`, `Iowa`, `200`, `bu/acre`, `Example Lab`, and `Mehlich-3`, then enable **Generate AI explanation** and run the soil brief. Show the returned explanation and its safety note.
+### 2. Demonstrate validation and ingestion
 
-Say:
+Open the CSV format help and upload
+`data/seed/demo-owned-batch.csv`. Show the resulting batch status and row
+counts, then explain the upload sequence:
 
-> The map and report use the same spatial data, but the report deliberately summarizes ranges rather than pretending multiple nearby samples are one composite result.
+1. The entire file is parsed and validated first.
+2. A durable PostgreSQL batch intent is committed.
+3. The original file is archived in S3/LocalStack.
+4. Soil rows and the final batch state are committed together.
 
-Say:
+Invalid rows produce row-level errors and do not partially create samples.
+Coordinates, pH, percentages, measurement ranges, and batch counts are
+validated by both the API schemas and database constraints.
 
-> The AI feature is deliberately opt-in. It receives aggregate measurements and the context I provide, not exact coordinates or sample IDs. It explains the summary in plain language; it does not prescribe rates or replace a lab, agronomist, or extension recommendation.
+### 3. Demonstrate authorization and lifecycle behavior
 
-## 3. Add one sample manually
+Open **My samples** and select the bootstrapped owned sample. Show that it can
+be edited, shared with a viewer or editor, archived, and restored.
 
-1. Select **Enter one sample manually**.
-2. Use fictional values, for example:
+The key point is that authentication and authorization are separate:
 
-   - Sample ID: `DEMO-WAVERLY-01`
-   - Field name: `North Field`
-   - Latitude: `42.7272`
-   - Longitude: `-92.4669`
-   - pH: `6.5`
-   - Organic matter: `3.8`
+- Cognito `sub` values are the ownership identity.
+- Access grants prefer stable subject IDs, with normalized email retained for
+  compatibility and invitation workflows.
+- Editors can update shared samples without becoming owners.
+- Archived samples leave normal maps and reports but remain recoverable.
 
-3. Save the sample.
-4. Return to the dashboard and refresh the map.
-5. Open the new marker.
+### 4. Close with the engineering overview
 
-Point out that the newly created record shows owner actions while the reference records remain read-only.
+The implementation uses React/TypeScript, FastAPI, Pydantic, async SQLAlchemy,
+PostgreSQL/PostGIS, and S3-compatible storage. Alembic owns schema evolution;
+the integration suite runs migrations against real PostgreSQL and verifies the
+live schema.
 
-## 4. Demonstrate ownership and sharing
+Authentication supports local API keys and Cognito OAuth authorization code
+with PKCE. Cognito sessions use HttpOnly access/refresh cookies, refresh-token
+rotation, CSRF protection for browser writes, and refresh-token revocation on
+logout.
 
-1. Open **My samples** from the navigation.
-2. Select **Edit** for the new sample and change a value, such as the field name.
-3. Return to **My samples**.
-4. Select **Manage access**.
-5. Grant a fictional signed-in user viewer or editor access.
+The repository includes unit tests, Docker-backed integration tests, frontend
+lint/build checks, Terraform validation, structured request logging, request
+IDs, and safe error responses. It deliberately does not create always-on
+compute, networking, or a production database, keeping the portfolio project
+reproducible and inexpensive.
 
-Say:
+## Useful technical discussion points
 
-> Authentication establishes who the user is, but authorization happens at the sample level. The owner can share a record, and an editor can modify it without becoming the owner.
+- **Why PostGIS?** Spatial filtering and radius reports belong in the database,
+  with a GiST index supporting the query path.
+- **Why a durable upload intent?** PostgreSQL and S3 are separate systems, so
+  the intent, lease, conditional finalization, and reconciliation job make
+  failure modes explicit.
+- **Why stable subjects instead of email ownership?** Email addresses can
+  change; Cognito subjects are the durable identity key.
+- **Why local emulators?** The project demonstrates the integration boundaries
+  without incurring cloud costs or requiring interviewers to provision AWS.
+- **What would come next?** A managed deployment would add compute,
+  PostgreSQL/PostGIS, networking, secrets, HTTPS ingress, and a controlled
+  migration job; those are documented but intentionally outside this portfolio
+  scope.
 
-## 5. Demonstrate archive and restore
+## Quick verification commands
 
-1. Return to **My samples**.
-2. Archive the demo sample.
-3. Show that it disappears from the active list and map.
-4. Enable **Include archived samples**.
-5. Restore the sample.
-6. Refresh the dashboard map and show that it is visible again.
+```bash
+curl -i http://localhost:8000/health/live
+curl -i http://localhost:8000/health/ready
+python -m pytest -q
+./scripts/run_integration_tests.sh
+```
 
-Say:
-
-> Archive is a reversible workflow that removes a sample from normal operational views while preserving its history and access records. Hard deletion remains a separate owner-only operation.
-
-## 6. Upload a CSV batch
-
-1. Return to the dashboard.
-2. Open **View CSV format and example**.
-3. Choose `data/seed/demo-owned-batch.csv`, `data/seed/ssurgo-iowa-demo.csv`, or use a small fictional CSV.
-4. Upload the batch.
-5. Point out accepted and rejected row counts.
-6. Refresh the map and show the imported locations.
-
-Say:
-
-> The API validates the complete file before inserting samples. Invalid batches return row-level errors and do not partially save the file.
-
-## 7. Close with the engineering story
-
-Use this summary:
-
-> The frontend is React and TypeScript, the API is FastAPI, and PostgreSQL/PostGIS handles relational and spatial queries. Cognito provides OAuth authentication, while ownership and sharing enforce sample-level authorization. Terraform manages the AWS authentication, storage, and IAM foundation. Docker Compose keeps the full demo reproducible locally, and GitHub Actions validates backend tests, frontend builds, Terraform, and the API image without requiring a live deployment.
-
-If asked about production deployment, explain that the repository intentionally does not provision EKS, compute, RDS, networking, or a public endpoint. Those are documented as a future deployment phase so the portfolio demo does not incur unnecessary ongoing cloud costs.
-
-## Backup talking points
-
-- Why PostGIS: spatial filtering and radius reports belong in the database.
-- Why Cognito: managed OAuth and token validation without storing passwords.
-- Why PKCE: protects the browser authorization-code flow without a client secret.
-- Why archive: safer operational recovery than immediate deletion.
-- Why no live deployment: the local environment demonstrates the application without creating always-on cloud spend.
-- Why CI without deployment: the repository proves repeatable validation while keeping cloud credentials out of pull requests.
-
+The regular suite uses mocks and does not require Docker. The integration
+helper requires the Compose PostgreSQL and LocalStack services and cleans up
+its generated records and objects.

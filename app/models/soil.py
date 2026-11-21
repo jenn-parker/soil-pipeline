@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from geoalchemy2 import Geography
 from geoalchemy2.elements import WKBElement, WKTElement
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 if TYPE_CHECKING:
@@ -14,6 +14,84 @@ from app.database import Base
 
 class SoilTestResult(Base):
     __tablename__ = "soil_samples"
+    __table_args__ = (
+        CheckConstraint(
+            "latitude IS NULL OR latitude BETWEEN -90 AND 90",
+            name="ck_soil_samples_latitude_range",
+        ),
+        CheckConstraint(
+            "longitude IS NULL OR longitude BETWEEN -180 AND 180",
+            name="ck_soil_samples_longitude_range",
+        ),
+        CheckConstraint(
+            "(latitude IS NULL) = (longitude IS NULL)",
+            name="ck_soil_samples_coordinate_pair",
+        ),
+        CheckConstraint(
+            "soil_ph IS NULL OR soil_ph BETWEEN 0 AND 14",
+            name="ck_soil_samples_soil_ph_range",
+        ),
+        CheckConstraint(
+            "buffer_ph IS NULL OR buffer_ph BETWEEN 0 AND 14",
+            name="ck_soil_samples_buffer_ph_range",
+        ),
+        CheckConstraint(
+            "sand_pct IS NULL OR sand_pct BETWEEN 0 AND 100",
+            name="ck_soil_samples_sand_pct_range",
+        ),
+        CheckConstraint(
+            "silt_pct IS NULL OR silt_pct BETWEEN 0 AND 100",
+            name="ck_soil_samples_silt_pct_range",
+        ),
+        CheckConstraint(
+            "clay_pct IS NULL OR clay_pct BETWEEN 0 AND 100",
+            name="ck_soil_samples_clay_pct_range",
+        ),
+        CheckConstraint(
+            "calcium_saturation_pct IS NULL OR calcium_saturation_pct BETWEEN 0 AND 100",
+            name="ck_soil_samples_calcium_saturation_range",
+        ),
+        CheckConstraint(
+            "magnesium_saturation_pct IS NULL OR magnesium_saturation_pct BETWEEN 0 AND 100",
+            name="ck_soil_samples_magnesium_saturation_range",
+        ),
+        CheckConstraint(
+            "potassium_saturation_pct IS NULL OR potassium_saturation_pct BETWEEN 0 AND 100",
+            name="ck_soil_samples_potassium_saturation_range",
+        ),
+        CheckConstraint(
+            "hydrogen_saturation_pct IS NULL OR hydrogen_saturation_pct BETWEEN 0 AND 100",
+            name="ck_soil_samples_hydrogen_saturation_range",
+        ),
+        CheckConstraint(
+            "sodium_saturation_pct IS NULL OR sodium_saturation_pct BETWEEN 0 AND 100",
+            name="ck_soil_samples_sodium_saturation_range",
+        ),
+        CheckConstraint(
+            "sampling_depth_inches IS NULL OR sampling_depth_inches >= 0",
+            name="ck_soil_samples_sampling_depth_nonnegative",
+        ),
+        CheckConstraint(
+            "bulk_density_g_cm3 IS NULL OR bulk_density_g_cm3 >= 0",
+            name="ck_soil_samples_bulk_density_nonnegative",
+        ),
+        CheckConstraint(
+            "nitrate_nitrogen_ppm IS NULL OR nitrate_nitrogen_ppm >= 0",
+            name="ck_soil_samples_nitrate_nonnegative",
+        ),
+        CheckConstraint(
+            "phosphorus_ppm IS NULL OR phosphorus_ppm >= 0",
+            name="ck_soil_samples_phosphorus_nonnegative",
+        ),
+        CheckConstraint(
+            "potassium_ppm IS NULL OR potassium_ppm >= 0",
+            name="ck_soil_samples_potassium_nonnegative",
+        ),
+        CheckConstraint(
+            "sulfur_ppm IS NULL OR sulfur_ppm >= 0",
+            name="ck_soil_samples_sulfur_nonnegative",
+        ),
+    )
 
     # Metadata & Geography
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
